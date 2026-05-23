@@ -208,3 +208,41 @@ once you see it; the cost is the round trip.
    `DialogParameters<T>`. So when in doubt, follow the shape of
    `EditUserDialog`/`EditUserGroupDialog`/`EditDocumentTypeDialog` —
    those compile and work on 9.4.
+
+## 2026-05-23 — Don't rely on transitive NuGet references
+
+The Infrastructure.Tests project called `services.AddLogging()` in its
+fixture but didn't reference `Microsoft.Extensions.Logging` — only the
+abstractions package (transitively, via the Infrastructure project). At
+some point that transitive resolution went away and the test project
+stopped compiling with:
+
+```
+CS1061: 'ServiceCollection' does not contain a definition for
+'AddLogging' and no accessible extension method 'AddLogging' …
+```
+
+The fix is one line in the test csproj — make the package reference
+explicit. But the principle is broader: **if code in a project calls an
+extension method, that project must reference the package the
+extension is in**, even if it builds today via some transitive path.
+NuGet's PrivateAssets/IncludeAssets defaults and 9-to-10 patch bumps
+both routinely drop transitive references that used to work.
+
+When a chunk's CI build fails with "method X doesn't exist on type Y"
+and the method is a Microsoft.Extensions.* extension, first guess:
+the project doesn't reference the concrete package, only the
+abstractions one. Specifically:
+
+- `Microsoft.Extensions.Logging.Abstractions` → has `ILogger<T>`,
+  `LogLevel`, but NOT `AddLogging`.
+- `Microsoft.Extensions.Logging` → has `AddLogging`, the host of
+  extension methods, etc.
+- `Microsoft.Extensions.DependencyInjection.Abstractions` → has
+  `IServiceCollection`, `ServiceLifetime`, but NOT `AddScoped`/
+  `BuildServiceProvider`/etc.
+- `Microsoft.Extensions.DependencyInjection` → has those.
+
+Rule of thumb: production code can reference *only the abstractions*
+to keep coupling low. Host code (Program.cs, test fixtures) needs the
+concrete packages.
