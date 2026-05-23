@@ -1,0 +1,92 @@
+@page "/admin/settings"
+@attribute [Authorize]
+@rendermode InteractiveServer
+
+@using Microsoft.AspNetCore.Authorization
+@using VendorSure.Domain.Configuration
+@using VendorSure.Services.Configuration
+
+@inject ISettingsRepository SettingsRepository
+@inject ILogger<Settings> Logger
+
+<PageTitle>Settings — VendorSure</PageTitle>
+
+<MudText Typo="Typo.h4" GutterBottom="true">Settings</MudText>
+<MudText Typo="Typo.body2" Class="mb-4 mud-text-secondary">
+    System-wide configuration. Sensitive values are masked.
+</MudText>
+
+<MudTable Items="@_settings"
+          Dense="true"
+          Hover="true"
+          Loading="@_loading"
+          LoadingProgressColor="Color.Primary"
+          Elevation="1">
+    <HeaderContent>
+        <MudTh>Key</MudTh>
+        <MudTh>Description</MudTh>
+        <MudTh>Value</MudTh>
+        <MudTh Style="width: 110px; text-align: center;">Required</MudTh>
+        <MudTh Style="width: 110px; text-align: center;">Sensitive</MudTh>
+    </HeaderContent>
+    <RowTemplate>
+        <MudTd DataLabel="Key">
+            <code>@context.Key</code>
+        </MudTd>
+        <MudTd DataLabel="Description">@context.Description</MudTd>
+        <MudTd DataLabel="Value">
+            @if (context.Sensitive)
+            {
+                <span class="mud-text-secondary">••••••••</span>
+            }
+            else if (string.IsNullOrEmpty(context.Value))
+            {
+                <span class="mud-text-disabled"><em>(empty)</em></span>
+            }
+            else
+            {
+                @context.Value
+            }
+        </MudTd>
+        <MudTd DataLabel="Required" Style="text-align: center;">
+            @if (context.Required)
+            {
+                <MudIcon Icon="@Icons.Material.Filled.Check" Color="Color.Success" Size="Size.Small" />
+            }
+        </MudTd>
+        <MudTd DataLabel="Sensitive" Style="text-align: center;">
+            @if (context.Sensitive)
+            {
+                <MudIcon Icon="@Icons.Material.Filled.Lock" Color="Color.Warning" Size="Size.Small" />
+            }
+        </MudTd>
+    </RowTemplate>
+    <NoRecordsContent>
+        <MudText>No settings found. The <code>settings</code> table appears to be empty — check that <code>data-model.sql</code> §16 has been applied.</MudText>
+    </NoRecordsContent>
+    <LoadingContent>
+        <MudText>Loading…</MudText>
+    </LoadingContent>
+</MudTable>
+
+@code {
+    private IReadOnlyList<Setting> _settings = Array.Empty<Setting>();
+    private bool _loading = true;
+
+    protected override async Task OnInitializedAsync()
+    {
+        try
+        {
+            _settings = await SettingsRepository.GetAllAsync();
+        }
+        catch (Exception ex)
+        {
+            Logger.LogError(ex, "Failed to load settings for /admin/settings.");
+            _settings = Array.Empty<Setting>();
+        }
+        finally
+        {
+            _loading = false;
+        }
+    }
+}
