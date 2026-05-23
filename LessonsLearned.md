@@ -61,3 +61,23 @@ Lesson: if you want a startup health surface that "logs but doesn't
 crash," the DI graph that feeds it must also be tolerant of bad config —
 otherwise the construction failure happens before any try/catch you wrote
 can run. Lazy resolution at the lowest level is the cleanest answer.
+
+## 2026-05-23 — Compaction summaries can lag the actual repo state
+
+When a long session is compacted into a summary and the agent picks up
+again, the summary is a snapshot taken at compaction time — not
+necessarily the moment work last stopped. In one Phase 1 session the
+summary described Chunk 5 as "started, not yet committed" with a list of
+files staged for commit. After compaction I sat down to finish Chunk 5
+and found those files already existed on disk and the chunk was
+committed *and pushed* (`99f830c`) — work that happened between the
+summary being generated and the session ending. I caught it before
+duplicating any code, but only after re-reading files that were already
+in place.
+
+Lesson: in any continuing session, **run `git log --oneline -10` and
+`git status` before trusting the compaction summary's claims about
+what's committed or pending.** The summary describes intent; git
+describes reality. When they disagree, git wins. This is cheap to do
+and prevents the worst failure mode (rewriting code that was already
+shipped, then forcing a merge or — worse — overwriting good commits).
