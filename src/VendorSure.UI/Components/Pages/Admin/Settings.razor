@@ -7,13 +7,16 @@
 @using VendorSure.Services.Configuration
 
 @inject ISettingsRepository SettingsRepository
+@inject IDialogService DialogService
+@inject ISnackbar Snackbar
 @inject ILogger<Settings> Logger
 
 <PageTitle>Settings — VendorSure</PageTitle>
 
 <MudText Typo="Typo.h4" GutterBottom="true">Settings</MudText>
 <MudText Typo="Typo.body2" Class="mb-4 mud-text-secondary">
-    System-wide configuration. Sensitive values are masked.
+    System-wide configuration. Sensitive values are masked. Click the edit
+    icon to change a value.
 </MudText>
 
 <MudTable Items="@_settings"
@@ -28,6 +31,7 @@
         <MudTh>Value</MudTh>
         <MudTh Style="width: 110px; text-align: center;">Required</MudTh>
         <MudTh Style="width: 110px; text-align: center;">Sensitive</MudTh>
+        <MudTh Style="width: 64px;"></MudTh>
     </HeaderContent>
     <RowTemplate>
         <MudTd DataLabel="Key">
@@ -60,6 +64,12 @@
                 <MudIcon Icon="@Icons.Material.Filled.Lock" Color="Color.Warning" Size="Size.Small" />
             }
         </MudTd>
+        <MudTd>
+            <MudIconButton Icon="@Icons.Material.Filled.Edit"
+                           Size="Size.Small"
+                           OnClick="@(() => OpenEditDialog(context))"
+                           aria-label="@($"Edit {context.Key}")" />
+        </MudTd>
     </RowTemplate>
     <NoRecordsContent>
         <MudText>No settings found. The <code>settings</code> table appears to be empty — check that <code>data-model.sql</code> §16 has been applied.</MudText>
@@ -75,6 +85,12 @@
 
     protected override async Task OnInitializedAsync()
     {
+        await LoadSettingsAsync();
+    }
+
+    private async Task LoadSettingsAsync()
+    {
+        _loading = true;
         try
         {
             _settings = await SettingsRepository.GetAllAsync();
@@ -83,10 +99,73 @@
         {
             Logger.LogError(ex, "Failed to load settings for /admin/settings.");
             _settings = Array.Empty<Setting>();
+            Snackbar.Add("Failed to load settings. Check the log for details.", Severity.Error);
         }
         finally
         {
             _loading = false;
+        }
+    }
+
+    private async Task OpenEditDialog(Setting setting)
+    {
+        var parameters = new DialogParameters<EditSettingDialog>
+        {
+            { x => x.Setting, setting }
+        };
+
+        var options = new DialogOptions
+        {
+            CloseOnEscapeKey = true,
+            MaxWidth = MaxWidth.Small,
+            FullWidth = true,
+        };
+
+        var dialog = await DialogService.ShowAsync<EditSettingDialog>(
+            $"Edit {setting.Key}", parameters, options);
+
+        var result = await dialog.Result;
+        if (result is null || result.Canceled)
+        {
+            return;
+        }
+
+        // The dialog returns the new value (string?) via DialogResult.Ok.
+        var newValue = result.Data as string;
+        await SaveSettingAsync(setting, newValue);
+    }
+
+    private async Task SaveSettingAsync(Setting setting, string? newValue)
+    {
+        try
+        {
+            var updated = await SettingsRepository.UpdateValueAsync(setting.Key, newValue);
+            if (updated)
+            {
+                Logger.LogInformation(
+                    "Setting '{Key}' updated by admin UI.", setting.Key);
+                Snackbar.Add($"Saved {setting.Key}.", Severity.Success);
+                await LoadSettingsAsync();
+            }
+            else
+            {
+                Logger.LogWarning(
+                    "UpdateValueAsync returned false for key '{Key}'. " +
+                    "Row may have been deleted between list load and save.",
+                    setting.Key);
+                Snackbar.Add(
+                    $"Could not save {setting.Key} — the row no longer exists.",
+                    Severity.Warning);
+                await LoadSettingsAsync();
+            }
+        }
+        catch (Exception ex)
+        {
+            Logger.LogError(ex,
+                "Failed to update setting '{Key}'.", setting.Key);
+            Snackbar.Add(
+                $"Failed to save {setting.Key}: {ex.Message}",
+                Severity.Error);
         }
     }
 }

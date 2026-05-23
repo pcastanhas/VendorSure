@@ -1,0 +1,76 @@
+@using VendorSure.Domain.Configuration
+
+<MudDialog>
+    <TitleContent>
+        <MudText Typo="Typo.h6">Edit setting</MudText>
+    </TitleContent>
+    <DialogContent>
+        <MudText Typo="Typo.body2" Class="mb-2"><code>@Setting.Key</code></MudText>
+        <MudText Typo="Typo.body2" Class="mb-4 mud-text-secondary">@Setting.Description</MudText>
+
+        <MudTextField @bind-Value="_value"
+                      Label="Value"
+                      Variant="Variant.Outlined"
+                      Lines="@(_isMultiline ? 4 : 1)"
+                      InputType="@_inputType"
+                      Adornment="@(Setting.Sensitive ? Adornment.End : Adornment.None)"
+                      AdornmentIcon="@_revealIcon"
+                      OnAdornmentClick="ToggleReveal"
+                      Immediate="true"
+                      Error="@IsInvalid"
+                      ErrorText="@ValidationMessage" />
+
+        @if (Setting.Required)
+        {
+            <MudText Typo="Typo.caption" Class="mt-1 mud-text-secondary">
+                Required — cannot be saved empty.
+            </MudText>
+        }
+    </DialogContent>
+    <DialogActions>
+        <MudButton OnClick="Cancel">Cancel</MudButton>
+        <MudButton Color="Color.Primary"
+                   Variant="Variant.Filled"
+                   OnClick="Save"
+                   Disabled="@IsInvalid">
+            Save
+        </MudButton>
+    </DialogActions>
+</MudDialog>
+
+@code {
+    [CascadingParameter] private IMudDialogInstance MudDialog { get; set; } = default!;
+
+    [Parameter, EditorRequired] public Setting Setting { get; set; } = default!;
+
+    private string? _value;
+    private bool _revealed;
+    private bool _isMultiline;
+
+    private InputType _inputType => Setting.Sensitive && !_revealed ? InputType.Password : InputType.Text;
+    private string _revealIcon => _revealed ? Icons.Material.Filled.VisibilityOff : Icons.Material.Filled.Visibility;
+
+    private bool IsInvalid => Setting.Required && string.IsNullOrWhiteSpace(_value);
+    private string? ValidationMessage => IsInvalid ? "This setting is required." : null;
+
+    protected override void OnInitialized()
+    {
+        _value = Setting.Value;
+        // Auto-expand for values that look like they want room (prompts, etc.).
+        _isMultiline = (_value?.Length ?? 0) > 80 || (_value?.Contains('\n') ?? false);
+    }
+
+    private void ToggleReveal() => _revealed = !_revealed;
+
+    private void Cancel() => MudDialog.Cancel();
+
+    private void Save()
+    {
+        if (IsInvalid) return;
+
+        // Treat blank-after-trim as null in the database. Empty strings and
+        // whitespace-only strings are functionally the same as "not set".
+        var toStore = string.IsNullOrWhiteSpace(_value) ? null : _value;
+        MudDialog.Close(DialogResult.Ok(toStore));
+    }
+}

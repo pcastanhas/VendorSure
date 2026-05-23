@@ -4,20 +4,23 @@
 
 ## Where we are
 
-**Phase 1 in progress.** Chunks 1-6 done (solution scaffold + MudBlazor,
+**Phase 1 complete.** All 7 chunks done (solution scaffold + MudBlazor,
 Serilog file logging, DB connection factory, debug identity shim, Settings
-repository with tests, Settings list page). Next: Chunk 7 (Settings edit
-dialog — the last chunk of Phase 1).
+repository with tests, Settings list page, Settings edit dialog). Next:
+phase-end docs commit (BUILD, CONCEPT if affected, LessonsLearned, PLAN),
+then start Phase 2 (Users + User Groups admin).
 
 Read these to get oriented:
-- `docs/PLAN.md` — the phase/chunk roadmap. **Next step is Phase 1 / Chunk 7.**
+- `docs/PLAN.md` — the phase/chunk roadmap. **Next step is the Phase 1
+  docs-rollup commit, then Phase 2 / Chunk 1.**
 - `docs/data-model.sql` — the reviewed schema.
 - `docs/CONCEPT.md` — design intent (§3.1 and §3.2 are stale; refreshed in
   Phase 6 / Phase 9).
-- `BUILD.md` — how to build/run locally. Current state: scaffold + MudBlazor
-  + Serilog + DB + debug identity + Settings repository + Settings list page.
+- `BUILD.md` — how to build/run locally. Phase 1 surface: scaffold,
+  MudBlazor, Serilog, DB, debug identity, full Settings admin (list +
+  edit).
 - `LessonsLearned.md` — running log of gotchas. Four entries so far.
-- `docs/REMOVE-BEFORE-PROD.md` — first real entries (debug identity shim).
+- `docs/REMOVE-BEFORE-PROD.md` — debug identity shim cutover checklist.
 
 ## Approach rules (locked in during design)
 
@@ -104,12 +107,13 @@ and `dotnet test`, reports back.
 
 ## Suggested next session
 
-**Phase 1 / Chunk 7 — Settings edit dialog.** Last chunk of Phase 1.
+**Phase 1 docs rollup, then Phase 2 / Chunk 1 (Users repository).**
 
-Per `docs/PLAN.md` Phase 1 Chunk 7: clicking a row in the settings table
-opens a MudDialog with the value editable. Save commits via the
-repository and refreshes the list. Validation: required settings can't
-be saved with an empty value. After this chunk, Phase 1 wraps with a
-docs commit (BUILD, CONTINUE, CONCEPT if affected, LessonsLearned, PLAN).
+Per the locked-in approach rules: at the end of every phase, do one
+commit covering `BUILD.md`, `CONCEPT.md` (if affected),
+`LessonsLearned.md`, `PLAN.md`, and `CONTINUE.md` — pulling everything
+into sync before the next phase starts. Phase 2 then begins with the
+Users repository (mirror of the Settings repository pattern from
+Chunk 5: domain, interface, Dapper impl, tests).
 
 PAT note: each session, user provides a short-lived PAT for the repo.
