@@ -9,8 +9,8 @@
   dev box, or container — all fine. The DB name should be `VenSure` to
   match what `data-model.sql` expects.
 - The `VenSure` database created and `docs/data-model.sql` applied against
-  it (covered in later chunks once the app actually needs DB access — for
-  Chunk 1a, the DB isn't read or written).
+  it. From Chunk 3 onwards the app talks to the DB at startup (reachability
+  check); from Chunk 4 onwards it also queries the `users` table.
 
 ## First-time setup
 
@@ -30,13 +30,32 @@
    installs that use a self-signed cert. For a corporate dev server with a
    proper cert, you can drop it.
 
-3. Restore packages and build:
+3. **Seed a user for the debug identity shim.** The shim authenticates every
+   request as the user whose `entraid` matches the configured OID, so you
+   need at least one row in `users` (and the `user_groups` row it FKs to):
+
+   ```sql
+   INSERT INTO dbo.user_groups (name, is_active, can_restart_workflow, can_change_workflow, can_submit_requests)
+   VALUES ('Developers', 1, 1, 1, 1);
+
+   INSERT INTO dbo.users (entraid, name, group_id, is_admin, is_active)
+   VALUES (
+       '00000000-0000-0000-0000-000000000001',
+       'Local Dev',
+       (SELECT id FROM dbo.user_groups WHERE name = 'Developers'),
+       1, 1);
+   ```
+
+   The OID in `appsettings.example.json` is `00000000-0000-0000-0000-000000000001`.
+   If you change it in `appsettings.json`, change the INSERT to match.
+
+4. Restore packages and build:
 
    ```
    dotnet build VendorSure.slnx
    ```
 
-   First restore takes a minute or two (MudBlazor is a few MB).
+   First restore takes a minute or two.
 
 ## Run
 
@@ -45,9 +64,15 @@ dotnet run --project src/VendorSure.UI
 ```
 
 Browse to the URL the launcher prints (typically `https://localhost:7298`).
-You should see a MudBlazor shell: top app bar reading "VendorSure", a left
+You should see a MudBlazor shell: top app bar reading "VendorSure" on the
+left and "Local Dev" (or whatever name you seeded) on the right, a left
 nav drawer with menu items (Home, Settings, Users, etc.), and the home
 page in the content area.
+
+If the top bar shows "Not signed in" in orange instead of a user name, the
+debug identity shim failed to find a user — check the log file for the
+specific error (typically: no `users` row with the configured `entraid`,
+or `Debug.Identity.Enabled` is false in `appsettings.json`).
 
 ## Test
 
@@ -83,14 +108,19 @@ to the `VendorSure.UI` binary at runtime). Daily rolling, 30-day retention.
 The console sink also writes to stdout while the app is in the foreground.
 
 Sample startup banner you should see in the log (order is approximate —
-hosted services run during `app.Run()` so the DB line may interleave with
-the ready line):
+hosted services and per-request auth happen at different points so lines
+may interleave):
 
 ```
 [HH:MM:SS INF] VendorSure UI starting up
 [HH:MM:SS INF] VendorSure UI ready — environment Development
 [HH:MM:SS INF] Connected to VenSure database (server=..., database=VenSure)
+[HH:MM:SS INF] Debug identity shim authenticated as 'Local Dev' (entraid=...). REMOVE-BEFORE-PROD.
 ```
+
+The "Debug identity shim authenticated" line appears on the first request
+that triggers the lookup, not at host startup. You'll see it once per app
+run (the principal is cached after the first hit).
 
 If the connection string is missing or the database is unreachable, you'll
 see an error line instead of the "Connected to VenSure" message, but the

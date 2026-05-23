@@ -1,7 +1,9 @@
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using VendorSure.Infrastructure.Data;
+using VendorSure.Infrastructure.Identity;
 using VendorSure.Services.Data;
+using VendorSure.Services.Identity;
 
 namespace VendorSure.Infrastructure;
 
@@ -20,6 +22,8 @@ public static class ServiceCollectionExtensions
 
         services.AddSingleton<IDbConnectionFactory, SqlConnectionFactory>();
         services.AddHostedService<DatabaseReachabilityCheck>();
+
+        services.AddScoped<IUserRepository, UserRepository>();
 
         return services;
     }

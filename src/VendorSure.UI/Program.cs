@@ -1,6 +1,7 @@
 using MudBlazor.Services;
 using Serilog;
 using VendorSure.Infrastructure;
+using VendorSure.UI.Authentication.Debug; // REMOVE-BEFORE-PROD
 using VendorSure.UI.Components;
 
 // Bootstrap logger: catches anything that explodes before host config is read.
@@ -31,6 +32,11 @@ try
     // Connection factory + startup reachability check.
     builder.Services.AddVendorSureInfrastructure(builder.Configuration);
 
+    // REMOVE-BEFORE-PROD: debug identity shim that bypasses Entra by stamping
+    // every request as the user whose entraid is configured in appsettings.
+    // Hard-refuses to load in Production.
+    builder.Services.AddDebugIdentity(builder.Configuration, builder.Environment);
+
     var app = builder.Build();
 
     if (!app.Environment.IsDevelopment())
@@ -43,6 +49,8 @@ try
 
     app.UseSerilogRequestLogging();
 
+    app.UseAuthentication();
+    app.UseAuthorization();
     app.UseAntiforgery();
 
     app.MapStaticAssets();

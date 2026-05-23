@@ -4,19 +4,19 @@
 
 ## Where we are
 
-**Phase 1 in progress.** Chunks 1-3 done (solution scaffold + MudBlazor,
-Serilog file logging, DB connection factory + startup reachability check).
-Next: Chunk 4 (Debug identity shim).
+**Phase 1 in progress.** Chunks 1-4 done (solution scaffold + MudBlazor,
+Serilog file logging, DB connection factory, debug identity shim).
+Next: Chunk 5 (Settings repository).
 
 Read these to get oriented:
-- `docs/PLAN.md` — the phase/chunk roadmap. **Next step is Phase 1 / Chunk 4.**
+- `docs/PLAN.md` — the phase/chunk roadmap. **Next step is Phase 1 / Chunk 5.**
 - `docs/data-model.sql` — the reviewed schema.
 - `docs/CONCEPT.md` — design intent (§3.1 and §3.2 are stale; refreshed in
   Phase 6 / Phase 9).
 - `BUILD.md` — how to build/run locally. Current state: scaffold + MudBlazor
-  + Serilog + DB connection factory.
+  + Serilog + DB + debug identity.
 - `LessonsLearned.md` — running log of gotchas. Two entries so far.
-- `docs/REMOVE-BEFORE-PROD.md` — cutover checklist (skeleton).
+- `docs/REMOVE-BEFORE-PROD.md` — first real entries (debug identity shim).
 
 ## Approach rules (locked in during design)
 
@@ -103,13 +103,11 @@ and `dotnet test`, reports back.
 
 ## Suggested next session
 
-**Phase 1 / Chunk 4 — Debug identity shim.**
+**Phase 1 / Chunk 5 — Settings repository.**
 
-Per `docs/PLAN.md` Phase 1 Chunk 4: reads `Debug.Identity.Enabled` and
-`Debug.Identity.Entraid` from `appsettings.json`. Looks up the matching
-`users` row by `entraid` and stamps the principal. Refuses to load if
-`Environment = Production`. All files under
-`VendorSure.UI/Authentication/Debug/` tagged with `REMOVE-BEFORE-PROD`
-comments. `docs/REMOVE-BEFORE-PROD.md` gets its first entries.
+Per `docs/PLAN.md` Phase 1 Chunk 5: Dapper-based `SettingsRepository` in
+Infrastructure with `GetAllAsync()`, `GetByKeyAsync(string key)`,
+`UpdateValueAsync(string key, string? value)`. Repository interface in
+Services. Tests in `VendorSure.Infrastructure.Tests` against the dev DB.
 
 PAT note: each session, user provides a short-lived PAT for the repo.
