@@ -1,0 +1,319 @@
+@*
+    Validations tab for the Request Type detail page.
+
+    Lists the validations for the displayed version in execution_order.
+    When the version is Draft: add/edit/delete affordances are enabled
+    plus a "Documents" button per row that opens
+    ManageValidationDocumentsDialog (sub-picker scoped to this version's
+    required documents).
+
+    When the version isn't Draft: read-only — table shows the
+    validations, the "Documents" button still opens the dialog but
+    the dialog itself disables its checkboxes.
+*@
+
+@using VendorSure.Domain.RequestTypes
+@using VendorSure.Services.RequestTypes
+
+@inject IRequestTypeValidationRepository ValidationRepository
+@inject IDialogService DialogService
+@inject ISnackbar Snackbar
+@inject ILogger<ValidationsTab> Logger
+
+@if (_loading)
+{
+    <MudProgressLinear Indeterminate="true" Color="Color.Primary" Class="my-2" />
+}
+else
+{
+    <MudStack Row="true" AlignItems="AlignItems.Center" Class="mb-3">
+        <MudText Typo="Typo.body2" Class="mud-text-secondary">
+            @if (IsDraft)
+            {
+                <span>Validations run in execution order on submission.</span>
+            }
+            else
+            {
+                <span>Read-only — this version's validations are frozen.</span>
+            }
+        </MudText>
+        <MudSpacer />
+        @if (IsDraft)
+        {
+            <MudButton Variant="Variant.Filled"
+                       Color="Color.Primary"
+                       StartIcon="@Icons.Material.Filled.Add"
+                       OnClick="OpenCreateDialog">
+                Add validation
+            </MudButton>
+        }
+    </MudStack>
+
+    @if (_validations.Count == 0)
+    {
+        <MudAlert Severity="Severity.Info" Variant="Variant.Text">
+            No validations yet@(IsDraft ? ". Click \"Add validation\" to create one." : ".")
+        </MudAlert>
+    }
+    else
+    {
+        <MudTable Items="@_validations" Dense="true" Hover="true" Elevation="0">
+            <HeaderContent>
+                <MudTh Style="width: 60px; text-align: center;">#</MudTh>
+                <MudTh>Description</MudTh>
+                <MudTh>Prompt</MudTh>
+                <MudTh Style="width: 160px;"></MudTh>
+            </HeaderContent>
+            <RowTemplate>
+                <MudTd DataLabel="#" Style="text-align: center;">
+                    @context.ExecutionOrder
+                </MudTd>
+                <MudTd DataLabel="Description">@context.Description</MudTd>
+                <MudTd DataLabel="Prompt">
+                    <span class="mud-text-secondary"
+                          style="display: inline-block; max-width: 480px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">
+                        @context.AiPrompt
+                    </span>
+                </MudTd>
+                <MudTd>
+                    <MudStack Row="true" Spacing="1">
+                        <MudIconButton Icon="@Icons.Material.Filled.Description"
+                                       Size="Size.Small"
+                                       Title="Manage attached documents"
+                                       OnClick="@(() => OpenDocumentsDialog(context))" />
+                        <MudIconButton Icon="@Icons.Material.Filled.Edit"
+                                       Size="Size.Small"
+                                       Disabled="@(!IsDraft)"
+                                       Title="@(IsDraft ? "Edit" : "Edit (read-only — version is not Draft)")"
+                                       OnClick="@(() => OpenEditDialog(context))" />
+                        <MudIconButton Icon="@Icons.Material.Filled.Delete"
+                                       Size="Size.Small"
+                                       Color="Color.Error"
+                                       Disabled="@(!IsDraft)"
+                                       Title="@(IsDraft ? "Delete" : "Delete (read-only — version is not Draft)")"
+                                       OnClick="@(() => DeleteAsync(context))" />
+                    </MudStack>
+                </MudTd>
+            </RowTemplate>
+        </MudTable>
+    }
+}
+
+@code {
+    [Parameter, EditorRequired] public int VersionId { get; set; }
+    [Parameter, EditorRequired] public bool IsDraft { get; set; }
+
+    private IReadOnlyList<RequestTypeValidation> _validations = Array.Empty<RequestTypeValidation>();
+    private bool _loading = true;
+    private int _loadedForVersionId = -1;
+
+    protected override async Task OnParametersSetAsync()
+    {
+        if (VersionId == _loadedForVersionId) return;
+        _loadedForVersionId = VersionId;
+        await LoadAsync();
+    }
+
+    private async Task LoadAsync()
+    {
+        _loading = true;
+        try
+        {
+            _validations = await ValidationRepository.ListByVersionIdAsync(VersionId);
+        }
+        catch (Exception ex)
+        {
+            Logger.LogError(ex, "Failed to load validations for version id={VersionId}.", VersionId);
+            Snackbar.Add("Failed to load validations. Check the log.", Severity.Error);
+            _validations = Array.Empty<RequestTypeValidation>();
+        }
+        finally
+        {
+            _loading = false;
+        }
+    }
+
+    private async Task OpenCreateDialog()
+    {
+        if (!IsDraft) return;
+
+        var seed = new RequestTypeValidation
+        {
+            Id = 0,
+            RequestTypeVersionId = VersionId,
+            Description = string.Empty,
+            AiPrompt = string.Empty,
+            ExecutionOrder = 0,
+        };
+
+        var options = new DialogOptions
+        {
+            CloseOnEscapeKey = true,
+            MaxWidth = MaxWidth.Medium,
+            FullWidth = true,
+        };
+        var parameters = new DialogParameters<EditValidationDialog>
+        {
+            { x => x.Validation, seed },
+        };
+
+        var dialog = await DialogService.ShowAsync<EditValidationDialog>(
+            "New validation", parameters, options);
+        var result = await dialog.Result;
+        if (result is null || result.Canceled) return;
+        if (result.Data is not RequestTypeValidation edited) return;
+
+        await CreateAsync(edited);
+    }
+
+    private async Task CreateAsync(RequestTypeValidation edited)
+    {
+        try
+        {
+            var result = await ValidationRepository.CreateAsync(
+                VersionId, edited.Description, edited.AiPrompt);
+            switch (result.Outcome)
+            {
+                case CreateValidationOutcome.Created:
+                    Logger.LogInformation(
+                        "Validation created (id={Id}, execution_order={Order}) on version id={VersionId}.",
+                        result.Id, result.ExecutionOrder, VersionId);
+                    Snackbar.Add(
+                        $"Validation added (execution order #{result.ExecutionOrder}).",
+                        Severity.Success);
+                    await LoadAsync();
+                    break;
+                case CreateValidationOutcome.RejectedVersionNotFound:
+                    Snackbar.Add("Cannot create: version no longer exists.", Severity.Error);
+                    break;
+                case CreateValidationOutcome.RejectedNotDraft:
+                    Snackbar.Add("Cannot create: version is no longer Draft.", Severity.Error);
+                    break;
+            }
+        }
+        catch (Exception ex)
+        {
+            Logger.LogError(ex, "Failed to create validation on version id={VersionId}.", VersionId);
+            Snackbar.Add($"Failed to create: {ex.Message}", Severity.Error);
+        }
+    }
+
+    private async Task OpenEditDialog(RequestTypeValidation validation)
+    {
+        if (!IsDraft) return;
+
+        var options = new DialogOptions
+        {
+            CloseOnEscapeKey = true,
+            MaxWidth = MaxWidth.Medium,
+            FullWidth = true,
+        };
+        var parameters = new DialogParameters<EditValidationDialog>
+        {
+            { x => x.Validation, validation },
+        };
+
+        var dialog = await DialogService.ShowAsync<EditValidationDialog>(
+            "Edit validation", parameters, options);
+        var result = await dialog.Result;
+        if (result is null || result.Canceled) return;
+        if (result.Data is not RequestTypeValidation edited) return;
+
+        await UpdateAsync(edited);
+    }
+
+    private async Task UpdateAsync(RequestTypeValidation edited)
+    {
+        try
+        {
+            var result = await ValidationRepository.UpdateAsync(
+                edited.Id, edited.Description, edited.AiPrompt);
+            switch (result)
+            {
+                case UpdateValidationResult.Updated:
+                    Logger.LogInformation("Validation id={Id} updated.", edited.Id);
+                    Snackbar.Add("Saved.", Severity.Success);
+                    await LoadAsync();
+                    break;
+                case UpdateValidationResult.NotFound:
+                    Snackbar.Add("Cannot save: validation no longer exists.", Severity.Warning);
+                    await LoadAsync();
+                    break;
+                case UpdateValidationResult.RejectedNotDraft:
+                    Snackbar.Add("Cannot save: version is no longer Draft.", Severity.Error);
+                    await LoadAsync();
+                    break;
+            }
+        }
+        catch (Exception ex)
+        {
+            Logger.LogError(ex, "Failed to update validation id={Id}.", edited.Id);
+            Snackbar.Add($"Failed to save: {ex.Message}", Severity.Error);
+        }
+    }
+
+    private async Task DeleteAsync(RequestTypeValidation validation)
+    {
+        if (!IsDraft) return;
+
+        var confirmed = await DialogService.ShowMessageBoxAsync(
+            title: $"Delete validation #{validation.ExecutionOrder}?",
+            markupMessage: new MarkupString(
+                $"This removes the validation and any attached documents. " +
+                $"<strong>{System.Net.WebUtility.HtmlEncode(validation.Description)}</strong>"),
+            yesText: "Delete",
+            cancelText: "Cancel",
+            options: new DialogOptions { CloseOnEscapeKey = true });
+
+        if (confirmed != true) return;
+
+        try
+        {
+            var result = await ValidationRepository.DeleteAsync(validation.Id);
+            switch (result)
+            {
+                case DeleteValidationResult.Deleted:
+                    Logger.LogInformation("Validation id={Id} deleted.", validation.Id);
+                    Snackbar.Add("Deleted.", Severity.Success);
+                    await LoadAsync();
+                    break;
+                case DeleteValidationResult.NotFound:
+                    Snackbar.Add("Already deleted.", Severity.Info);
+                    await LoadAsync();
+                    break;
+                case DeleteValidationResult.RejectedNotDraft:
+                    Snackbar.Add("Cannot delete: version is no longer Draft.", Severity.Error);
+                    break;
+            }
+        }
+        catch (Exception ex)
+        {
+            Logger.LogError(ex, "Failed to delete validation id={Id}.", validation.Id);
+            Snackbar.Add($"Failed to delete: {ex.Message}", Severity.Error);
+        }
+    }
+
+    private async Task OpenDocumentsDialog(RequestTypeValidation validation)
+    {
+        var options = new DialogOptions
+        {
+            CloseOnEscapeKey = true,
+            MaxWidth = MaxWidth.Small,
+            FullWidth = true,
+        };
+        var parameters = new DialogParameters<ManageValidationDocumentsDialog>
+        {
+            { x => x.ValidationId, validation.Id },
+            { x => x.VersionId, VersionId },
+            { x => x.IsDraft, IsDraft },
+            { x => x.ValidationDescription, validation.Description },
+        };
+
+        var dialog = await DialogService.ShowAsync<ManageValidationDocumentsDialog>(
+            "Validation documents", parameters, options);
+        await dialog.Result;
+        // No state to refresh on the tab itself — the dialog modifies
+        // the validation-document junction, which isn't shown in the
+        // table. The dialog handles its own internal state.
+    }
+}

@@ -1,0 +1,217 @@
+@*
+    Sub-picker for attaching docs to a validation.
+
+    The available choices are the *Required Documents already attached
+    to this version*. The validation-document junction's schema FKs
+    only enforce existence, but the repository enforces same-version —
+    so the picker scope must match the version, otherwise the repo
+    would reject every attempt with RejectedVersionMismatch.
+
+    Loads twice on open: the version's required-doc junctions and the
+    validation's currently-attached doc junctions. Joins client-side
+    to build a row per required-doc with an Attached checkbox.
+
+    All mutations Draft-only (the parent owns the IsDraft determination;
+    if false, the dialog opens read-only).
+*@
+
+@using VendorSure.Services.RequestTypes
+
+@inject IRequestTypeRequiredDocumentRepository RequiredDocsRepository
+@inject IRequestTypeValidationDocumentRepository JunctionRepository
+@inject ISnackbar Snackbar
+@inject ILogger<ManageValidationDocumentsDialog> Logger
+
+<MudDialog>
+    <TitleContent>
+        <MudText Typo="Typo.h6">Documents for "@ValidationDescription"</MudText>
+    </TitleContent>
+    <DialogContent>
+        @if (_loading)
+        {
+            <MudProgressLinear Indeterminate="true" Color="Color.Primary" Class="my-2" />
+        }
+        else if (_rows.Count == 0)
+        {
+            <MudAlert Severity="Severity.Warning" Variant="Variant.Text">
+                No required documents are attached to this version yet.
+                Use the <strong>Required Documents</strong> tab to add some,
+                then come back here to choose which ones this validation
+                reads.
+            </MudAlert>
+        }
+        else
+        {
+            @if (!IsDraft)
+            {
+                <MudText Typo="Typo.body2" Class="mud-text-secondary mb-2">
+                    Read-only — this version is frozen.
+                </MudText>
+            }
+
+            <MudTable Items="@_rows" Dense="true" Hover="true" Elevation="0">
+                <HeaderContent>
+                    <MudTh>Document</MudTh>
+                    <MudTh Style="width: 120px; text-align: center;">Attached</MudTh>
+                </HeaderContent>
+                <RowTemplate>
+                    <MudTd DataLabel="Document">@context.LibraryName</MudTd>
+                    <MudTd DataLabel="Attached" Style="text-align: center;">
+                        <MudCheckBox T="bool"
+                                     Value="@context.IsAttached"
+                                     ValueChanged="@((bool newValue) => ToggleAsync(context, newValue))"
+                                     Disabled="@(!IsDraft || _busy)"
+                                     Color="Color.Primary" />
+                    </MudTd>
+                </RowTemplate>
+            </MudTable>
+        }
+    </DialogContent>
+    <DialogActions>
+        <MudButton OnClick="Close">Close</MudButton>
+    </DialogActions>
+</MudDialog>
+
+@code {
+    [CascadingParameter] private IMudDialogInstance MudDialog { get; set; } = default!;
+
+    [Parameter, EditorRequired] public int ValidationId { get; set; }
+    [Parameter, EditorRequired] public int VersionId { get; set; }
+    [Parameter, EditorRequired] public bool IsDraft { get; set; }
+    [Parameter, EditorRequired] public string ValidationDescription { get; set; } = string.Empty;
+
+    private sealed class Row
+    {
+        public required int RequiredDocId { get; init; }
+        public required string LibraryName { get; init; }
+        public int? JunctionId { get; set; }
+        public bool IsAttached => JunctionId.HasValue;
+    }
+
+    private List<Row> _rows = new();
+    private bool _loading = true;
+    private bool _busy;
+
+    protected override async Task OnInitializedAsync() => await LoadAsync();
+
+    private async Task LoadAsync()
+    {
+        _loading = true;
+        try
+        {
+            // Two parallel fetches: the version's required-docs (the
+            // available pool) and the validation's currently-attached
+            // doc-junctions (the selected subset).
+            var requiredTask = RequiredDocsRepository.ListByVersionIdAsync(VersionId);
+            var attachedTask = JunctionRepository.ListByValidationIdAsync(ValidationId);
+            await Task.WhenAll(requiredTask, attachedTask);
+
+            var attachedByRequiredDocId = attachedTask.Result
+                .ToDictionary(a => a.RequestTypeRequiredDocumentId);
+
+            _rows = requiredTask.Result
+                .OrderBy(r => r.LibraryName, StringComparer.Ordinal)
+                .Select(r => new Row
+                {
+                    RequiredDocId = r.Id,
+                    LibraryName = r.LibraryName,
+                    JunctionId = attachedByRequiredDocId.TryGetValue(r.Id, out var j)
+                        ? j.Id
+                        : null,
+                })
+                .ToList();
+        }
+        catch (Exception ex)
+        {
+            Logger.LogError(ex, "Failed to load validation-documents picker for validation id={ValidationId}.", ValidationId);
+            Snackbar.Add("Failed to load. Check the log.", Severity.Error);
+            _rows = new();
+        }
+        finally
+        {
+            _loading = false;
+        }
+    }
+
+    private async Task ToggleAsync(Row row, bool wantAttached)
+    {
+        if (_busy || !IsDraft) return;
+        _busy = true;
+
+        try
+        {
+            if (wantAttached && !row.IsAttached)
+            {
+                var result = await JunctionRepository.AddAsync(ValidationId, row.RequiredDocId);
+                switch (result.Outcome)
+                {
+                    case AddValidationDocumentOutcome.Added:
+                        Logger.LogInformation(
+                            "Attached required-doc id={RequiredDocId} to validation id={ValidationId} (junction id={JunctionId}).",
+                            row.RequiredDocId, ValidationId, result.Id);
+                        Snackbar.Add($"Attached {row.LibraryName}.", Severity.Success);
+                        break;
+                    case AddValidationDocumentOutcome.RejectedDuplicate:
+                        Snackbar.Add($"{row.LibraryName} was already attached.", Severity.Info);
+                        break;
+                    case AddValidationDocumentOutcome.RejectedNotDraft:
+                        Snackbar.Add("Cannot attach: version is no longer Draft.", Severity.Error);
+                        break;
+                    case AddValidationDocumentOutcome.RejectedValidationNotFound:
+                        Snackbar.Add("Cannot attach: validation no longer exists.", Severity.Error);
+                        break;
+                    case AddValidationDocumentOutcome.RejectedRequiredDocumentNotFound:
+                        Snackbar.Add($"Cannot attach: {row.LibraryName} no longer required.", Severity.Error);
+                        break;
+                    case AddValidationDocumentOutcome.RejectedVersionMismatch:
+                        // The repo's same-version invariant: if this ever
+                        // fires, something built the picker rows incorrectly
+                        // (passed a foreign version's required-docs). Log
+                        // it loud — the user can't fix it.
+                        Logger.LogError(
+                            "Same-version invariant violated: validation id={ValidationId} (version id={VersionId}) "
+                            + "and required-doc id={RequiredDocId} belong to different versions.",
+                            ValidationId, VersionId, row.RequiredDocId);
+                        Snackbar.Add("Cannot attach: version mismatch. Reload the page.", Severity.Error);
+                        break;
+                }
+            }
+            else if (!wantAttached && row.IsAttached)
+            {
+                var junctionId = row.JunctionId!.Value;
+                var result = await JunctionRepository.RemoveAsync(junctionId);
+                switch (result)
+                {
+                    case RemoveValidationDocumentResult.Removed:
+                        Logger.LogInformation(
+                            "Detached required-doc id={RequiredDocId} from validation id={ValidationId} (junction id={JunctionId}).",
+                            row.RequiredDocId, ValidationId, junctionId);
+                        Snackbar.Add($"Detached {row.LibraryName}.", Severity.Success);
+                        break;
+                    case RemoveValidationDocumentResult.NotFound:
+                        Snackbar.Add($"{row.LibraryName} was already detached.", Severity.Info);
+                        break;
+                    case RemoveValidationDocumentResult.RejectedNotDraft:
+                        Snackbar.Add("Cannot detach: version is no longer Draft.", Severity.Error);
+                        break;
+                }
+            }
+
+            await LoadAsync();
+        }
+        catch (Exception ex)
+        {
+            Logger.LogError(ex, "Toggle failed: validation id={ValidationId}, required-doc id={RequiredDocId}.",
+                ValidationId, row.RequiredDocId);
+            Snackbar.Add($"Failed: {ex.Message}", Severity.Error);
+        }
+        finally
+        {
+            _busy = false;
+        }
+    }
+
+    // The dialog returns nothing meaningful — its mutations are saved
+    // server-side as they happen. Closing just dismisses the modal.
+    private void Close() => MudDialog.Close(DialogResult.Ok(true));
+}

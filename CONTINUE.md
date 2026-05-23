@@ -4,14 +4,15 @@
 
 ## Where we are
 
-**Phase 4 in progress.** Chunks 1-6 done (repositories for type +
+**Phase 4 in progress.** Chunks 1-7 done (repositories for type +
 version, junction, validations + validation-doc junction; admin
 list page; detail page with header section + type-level edit + tabs
-scaffold; Required Documents tab wired). Next: Phase 4 / Chunk 7
-(Validations tab).
+scaffold; Required Documents tab wired; Validations tab wired with
+add/edit/delete + sub-picker for attached documents). Next: Phase 4
+/ Chunk 8 (Selection Prompt tab).
 
 Read these to get oriented:
-- `docs/PLAN.md` — the phase/chunk roadmap. **Next step is Phase 4 / Chunk 7.**
+- `docs/PLAN.md` — the phase/chunk roadmap. **Next step is Phase 4 / Chunk 8.**
 - `docs/data-model.sql` — the reviewed schema.
 - `docs/CONCEPT.md` — design intent. §3.3 covers Settings, User Groups,
   Users, Required Documents admin pages; §3.1 and §3.2 still scheduled
@@ -107,15 +108,12 @@ and `dotnet test`, reports back.
 
 ## Suggested next session
 
-**Phase 4 / Chunk 7 — Validations tab.**
+**Phase 4 / Chunk 8 — Selection Prompt tab.**
 
-Per `docs/PLAN.md` Phase 4 Chunk 7: fill in the "Validations" tab on
-the detail page. List of validations (description, prompt, exec
-order) for the displayed version with add/edit/delete dialog. Each
-validation's per-document attachments (the
-`request_type_validation_documents` junction from Chunk 3) are a
-sub-picker inside the edit dialog, scoped to the same version's
-required documents. Draft-only mutation pattern, matching the
-Required Documents tab's read-only-when-not-Draft posture.
+Per `docs/PLAN.md` Phase 4 Chunk 8: fill in the "Selection Prompt"
+tab. Single multi-line text area bound to the version's
+`workflow_selection_prompt` field with a Save button. Calls
+`IRequestTypeVersionRepository.UpdateAsync` (which already covers
+the prompt — see Chunk 1). Same Draft-only mutation rule.
 
 PAT note: each session, user provides a short-lived PAT for the repo.

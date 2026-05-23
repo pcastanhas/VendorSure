@@ -1,0 +1,97 @@
+@*
+    Create-or-edit dialog for a Request Type Validation.
+
+    Fields: description (short) + ai_prompt (long, multi-line). Returns
+    the edited values via DialogResult.Ok; the calling page decides
+    whether to call CreateAsync or UpdateAsync based on the validation's
+    id (0 = create).
+
+    No execution_order edit here — Chunk 3's repo deliberately makes
+    that field append-only on create, and the UI for reordering is its
+    own future feature (PLAN doesn't ask for it yet).
+
+    No doc sub-picker here — that lives in a separate ManageValidationDocumentsDialog
+    so the create flow doesn't have to deal with "you can't attach
+    documents to a validation that doesn't have an id yet."
+*@
+
+@using VendorSure.Domain.RequestTypes
+
+<MudDialog>
+    <TitleContent>
+        <MudText Typo="Typo.h6">@TitleText</MudText>
+    </TitleContent>
+    <DialogContent>
+        <MudStack Spacing="3">
+            <MudTextField @bind-Value="_description"
+                          Label="Description"
+                          Variant="Variant.Outlined"
+                          Immediate="true"
+                          Error="@DescriptionIsInvalid"
+                          ErrorText="Description is required."
+                          MaxLength="200"
+                          HelperText="Short label for the validation. Shown to reviewers." />
+
+            <MudTextField @bind-Value="_aiPrompt"
+                          Label="AI prompt"
+                          Variant="Variant.Outlined"
+                          Immediate="true"
+                          Error="@PromptIsInvalid"
+                          ErrorText="Prompt is required."
+                          Lines="8"
+                          HelperText="Instruction sent to the AI service. Use multi-line and full sentences." />
+        </MudStack>
+    </DialogContent>
+    <DialogActions>
+        <MudButton OnClick="Cancel">Cancel</MudButton>
+        <MudButton Color="Color.Primary"
+                   Variant="Variant.Filled"
+                   OnClick="Save"
+                   Disabled="@(DescriptionIsInvalid || PromptIsInvalid)">
+            Save
+        </MudButton>
+    </DialogActions>
+</MudDialog>
+
+@code {
+    [CascadingParameter] private IMudDialogInstance MudDialog { get; set; } = default!;
+
+    /// <summary>
+    /// The validation being edited. <c>Id == 0</c> means "create new" —
+    /// the caller must also pass <see cref="RequestTypeVersionId"/> in
+    /// that case so the new row knows its parent.
+    /// </summary>
+    [Parameter, EditorRequired] public RequestTypeValidation Validation { get; set; } = default!;
+
+    private string _description = string.Empty;
+    private string _aiPrompt = string.Empty;
+
+    private bool IsCreate => Validation.Id == 0;
+    private string TitleText => IsCreate ? "New validation" : "Edit validation";
+
+    private bool DescriptionIsInvalid => string.IsNullOrWhiteSpace(_description);
+    private bool PromptIsInvalid => string.IsNullOrWhiteSpace(_aiPrompt);
+
+    protected override void OnInitialized()
+    {
+        _description = Validation.Description;
+        _aiPrompt = Validation.AiPrompt;
+    }
+
+    private void Cancel() => MudDialog.Cancel();
+
+    private void Save()
+    {
+        if (DescriptionIsInvalid || PromptIsInvalid) return;
+
+        var result = new RequestTypeValidation
+        {
+            Id = Validation.Id,
+            RequestTypeVersionId = Validation.RequestTypeVersionId,
+            Description = _description.Trim(),
+            AiPrompt = _aiPrompt.Trim(),
+            ExecutionOrder = Validation.ExecutionOrder,
+        };
+        MudDialog.Close(DialogResult.Ok(result));
+    }
+}
