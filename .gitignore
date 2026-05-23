@@ -1,0 +1,32 @@
+# .NET build outputs
+**/bin/
+**/obj/
+**/out/
+*.user
+*.suo
+.vs/
+
+# Logs (Serilog writes here at runtime; wired in Chunk 1b)
+logs/
+
+# Local appsettings — commit appsettings.example.json instead
+**/appsettings.json
+**/appsettings.Development.json
+**/appsettings.Production.json
+
+# User secrets
+**/secrets.json
+
+# Rider / VS Code
+.idea/
+.vscode/
+
+# Test results
+TestResults/
+*.trx
+*.coverage
+*.coveragexml
+
+# NuGet
+*.nupkg
+*.snupkg

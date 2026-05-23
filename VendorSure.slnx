@@ -1,0 +1,16 @@
+<Solution>
+  <Folder Name="/src/">
+    <Project Path="src/VendorSure.BackgroundWorkers/VendorSure.BackgroundWorkers.csproj" />
+    <Project Path="src/VendorSure.Domain/VendorSure.Domain.csproj" />
+    <Project Path="src/VendorSure.Infrastructure/VendorSure.Infrastructure.csproj" />
+    <Project Path="src/VendorSure.Services/VendorSure.Services.csproj" />
+    <Project Path="src/VendorSure.UI/VendorSure.UI.csproj" />
+  </Folder>
+  <Folder Name="/tests/">
+    <Project Path="tests/VendorSure.BackgroundWorkers.Tests/VendorSure.BackgroundWorkers.Tests.csproj" />
+    <Project Path="tests/VendorSure.Domain.Tests/VendorSure.Domain.Tests.csproj" />
+    <Project Path="tests/VendorSure.Infrastructure.Tests/VendorSure.Infrastructure.Tests.csproj" />
+    <Project Path="tests/VendorSure.Services.Tests/VendorSure.Services.Tests.csproj" />
+    <Project Path="tests/VendorSure.UI.Tests/VendorSure.UI.Tests.csproj" />
+  </Folder>
+</Solution>

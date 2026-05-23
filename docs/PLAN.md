@@ -43,41 +43,49 @@ in place.
 1. **Solution scaffold + MudBlazor empty shell.** Create the five `src` and
    five `tests` projects with correct inter-project references. Wire MudBlazor
    into `VendorSure.UI` with a minimal layout (top bar, blank content area).
-   `appsettings.json` exists with a connection string and Serilog config block.
-   Serilog set up with file sink, 30-day retention, rolling daily. Connection
-   factory in Infrastructure plus a startup health check that logs whether the
-   DB is reachable.
-   **Test:** `dotnet build` succeeds. `dotnet run` boots, logs to
-   `logs/app-YYYY-MM-DD.log`, page renders with the MudBlazor shell. If the
-   connection string points at a real `VenSure` DB, startup log says
-   "connected"; otherwise says "DB unreachable" but app still runs.
+   `appsettings.json` is `.gitignore`'d; commit `appsettings.example.json`
+   instead. BUILD.md tells the developer to copy example → real and fill in.
+   **Test:** `dotnet build` succeeds. `dotnet run` boots, page renders the
+   MudBlazor shell.
 
-2. **Debug identity shim.** Reads `Debug.Identity.Enabled` (claim) from
-   `appsettings.json` (not from `settings` table — that read needs the
-   identity that this shim provides, chicken/egg). Reads
-   `Debug.Identity.Entraid` from same. On request, looks up the matching
-   `users` row by `entraid` and stamps the principal. Refuses to load if
-   `Environment = Production` regardless. All files in
-   `VendorSure.UI/Authentication/Debug/` and tagged with `REMOVE-BEFORE-PROD`
-   comments. Companion `docs/REMOVE-BEFORE-PROD.md` skeleton listing what to
-   delete.
-   **Test:** seed one row in `users`. Configure shim. Start app. Top bar shows
-   the user's name. Disable shim in config. Start app. Auth page shows "Entra
-   not configured."
+2. **Serilog wiring.** Add Serilog with file sink, daily rolling, 30-day
+   retention. Configuration in the example appsettings. Startup writes a
+   banner line.
+   **Test:** `dotnet run` produces `logs/app-YYYY-MM-DD.log` with the banner
+   entry visible.
 
-3. **Settings repository.** Dapper-based `SettingsRepository` in
+3. **DB connection factory + startup reachability check.** `IDbConnectionFactory`
+   interface in Services; `SqlConnectionFactory` impl in Infrastructure using
+   Microsoft.Data.SqlClient. Connection string read from appsettings via
+   `IOptions<T>`. Startup runs a `SELECT 1` and logs "connected to VenSure"
+   or "DB unreachable: <reason>". App still boots either way.
+   **Test:** with a valid connection string, see "connected" log line; with
+   a bad one, see "unreachable" log line; app still runs.
+
+4. **Debug identity shim.** Reads `Debug.Identity.Enabled` and
+   `Debug.Identity.Entraid` from `appsettings.json` (not from the `settings`
+   table — that read would need the identity this shim provides). On
+   request, looks up the matching `users` row by `entraid` and stamps the
+   principal. Refuses to load if `Environment = Production` regardless. All
+   files in `VendorSure.UI/Authentication/Debug/` tagged with
+   `REMOVE-BEFORE-PROD` comments. `docs/REMOVE-BEFORE-PROD.md` updated.
+   **Test:** seed one row in `users`. Configure shim. Start app. Top bar
+   shows the user's name. Disable shim in config. Start app. Page shows
+   "Entra not configured."
+
+5. **Settings repository.** Dapper-based `SettingsRepository` in
    Infrastructure with `GetAllAsync()`, `GetByKeyAsync(string key)`,
    `UpdateValueAsync(string key, string? value)`. Connection management via
    the connection factory. Repository interface lives in Services.
    **Test:** `tests/VendorSure.Infrastructure.Tests/SettingsRepositoryTests`
    runs against the dev DB. Round-trips a value through update + read.
 
-4. **Settings list page.** `/admin/settings` route. MudTable of all settings
+6. **Settings list page.** `/admin/settings` route. MudTable of all settings
    rows (description, value, required, sensitive). Sensitive values masked.
    Read-only for now.
    **Test:** open the page, see the 10 seeded rows, sensitive ones masked.
 
-5. **Settings edit dialog.** Click a row → MudDialog with the value editable.
+7. **Settings edit dialog.** Click a row → MudDialog with the value editable.
    Save commits via the repository, refreshes the list. Validation: required
    settings can't be saved with empty value.
    **Test:** edit the value of `AI.Monthly.Budget.Usd`, see new value in the

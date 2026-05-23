@@ -1,51 +1,90 @@
 # BUILD.md
 
-> How to build, run, and test VendorSure locally. This document grows as the
-> app gains capabilities. If something here is stale, fix it in the same
-> commit that broke it.
+> How to build, run, and test VendorSure locally.
 
-## Status
+## Prerequisites
 
-No code yet. Phase 1 / Chunk 1 will add the solution structure and this
-document's first real content.
+- **.NET 10 SDK** (10.0.107 or later)
+- A **SQL Server** reachable from your dev machine. Local Express, remote
+  dev box, or container — all fine. The DB name should be `VenSure` to
+  match what `data-model.sql` expects.
+- The `VenSure` database created and `docs/data-model.sql` applied against
+  it (covered in later chunks once the app actually needs DB access — for
+  Chunk 1a, the DB isn't read or written).
 
-## Prerequisites (anticipated)
+## First-time setup
 
-- .NET 10 SDK.
-- A SQL Server instance reachable from your dev machine. Local Express,
-  remote dev box, or container — all fine.
-- The `VenSure` database created and `docs/data-model.sql` applied against it.
+1. Clone the repo.
 
-## Configuration (anticipated)
+2. Copy `src/VendorSure.UI/appsettings.example.json` →
+   `src/VendorSure.UI/appsettings.json` and fill in any environment-specific
+   values. (For Chunk 1a there's nothing to fill in — the example and the
+   real file are identical. Later chunks add a connection string, Serilog
+   config, the debug identity shim, etc.)
 
-Coming with Phase 1 / Chunk 1.
+3. Restore packages and build:
 
-## Build (anticipated)
+   ```
+   dotnet build VendorSure.slnx
+   ```
 
-```bash
-dotnet build VendorSure.sln
+   First restore takes a minute or two (MudBlazor is a few MB).
+
+## Run
+
 ```
-
-## Run (anticipated)
-
-```bash
 dotnet run --project src/VendorSure.UI
 ```
 
-## Test (anticipated)
+Browse to the URL the launcher prints (typically `https://localhost:7298`).
+You should see a MudBlazor shell: top app bar reading "VendorSure", a left
+nav drawer with menu items (Home, Settings, Users, etc.), and the home
+page in the content area.
 
-```bash
-dotnet test
+## Test
+
+```
+dotnet test VendorSure.slnx
 ```
 
-## Logs (anticipated)
+There are no tests yet (Chunk 1a adds no asserts). The test projects exist
+and `dotnet test` should report zero failures.
 
-Serilog writes to `logs/app-YYYY-MM-DD.log` in the working directory, rolling
-daily, 30-day retention.
+## Solution layout
+
+```
+src/
+  VendorSure.Domain/             entities, enums, value objects
+  VendorSure.Services/           orchestration + interfaces it consumes
+  VendorSure.Infrastructure/     Dapper data access, storage, Claude client
+  VendorSure.BackgroundWorkers/  Windows Service host (workflow engine,
+                                 budget polling) — placeholder worker for
+                                 now
+  VendorSure.UI/                 Blazor Server host (MudBlazor)
+tests/
+  one project per src/ project
+```
+
+Dependency direction: `UI` and `BackgroundWorkers` → `Services` →
+`Infrastructure` → `Domain`. `Domain` references nothing.
+
+## Logs
+
+Serilog with file sink (daily rolling, 30-day retention) wires up in
+Chunk 1b. Until then, console logging only.
 
 ## Schema changes
 
-`docs/data-model.sql` is the source of truth for the schema. When the schema
-changes, edit this file and apply the changes manually to your dev DB. There
-is no migration runner; this is intentional (single-developer, single-dev-DB,
-no production deploy in scope).
+`docs/data-model.sql` is the source of truth for the DB schema. When the
+schema changes, edit this file and apply the change manually to your dev
+DB. There is no migration runner — single-developer, single-dev-DB, no
+production deploy in scope.
+
+## Sandbox / agent build limitations
+
+The development sandbox (where the agent does its work) cannot reach
+`api.nuget.org`. Consequence: any restore-dependent operation
+(`dotnet restore`, `build`, `test`, `run`) fails in the sandbox. The agent
+authors code and commits it; **the developer is the only one who can
+actually compile and test.** Round-trip: agent commits → you pull, build,
+test, report back → agent fixes.

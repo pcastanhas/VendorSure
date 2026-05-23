@@ -4,17 +4,20 @@
 
 ## Where we are
 
-**End of Design phase. Start of Build phase (Phase 1).** Schema is committed
-at `docs/data-model.sql`. Build plan is committed at `docs/PLAN.md`.
-No code yet.
+**Phase 1 in progress.** Chunk 1 (solution scaffold + MudBlazor shell) is
+done. Next: Chunk 2 (Serilog wiring).
+
+The chunk numbering was refined at start of session: original PLAN.md
+Chunk 1 was bundling four distinct things; split into 1/2/3 (scaffold,
+Serilog, DB connection). The rest of Phase 1 renumbered up to 7.
 
 Read these to get oriented:
-- `docs/PLAN.md` — the phase/chunk roadmap. **Next step is Phase 1 / Chunk 1.**
+- `docs/PLAN.md` — the phase/chunk roadmap. **Next step is Phase 1 / Chunk 2.**
 - `docs/data-model.sql` — the reviewed schema.
 - `docs/CONCEPT.md` — design intent (§3.1 and §3.2 are stale; refreshed in
   Phase 6 / Phase 9).
-- `BUILD.md` — how to build/run locally (skeleton; grows with the app).
-- `LessonsLearned.md` — running log of gotchas (empty so far).
+- `BUILD.md` — how to build/run locally. Current state: scaffold + MudBlazor.
+- `LessonsLearned.md` — running log of gotchas. Two entries so far.
 - `docs/REMOVE-BEFORE-PROD.md` — cutover checklist (skeleton).
 
 ## Approach rules (locked in during design)
@@ -102,10 +105,11 @@ and `dotnet test`, reports back.
 
 ## Suggested next session
 
-**Phase 1 / Chunk 1 — Solution scaffold + MudBlazor empty shell.**
+**Phase 1 / Chunk 2 — Serilog wiring.**
 
-See `docs/PLAN.md` Phase 1 for the chunk description. Deliverable: empty
-Blazor Server app boots, serves a MudBlazor shell, logs to file, reports DB
-reachability. Five src + five test projects with correct references.
+Per `docs/PLAN.md` Phase 1 Chunk 2: add Serilog with file sink, daily
+rolling, 30-day retention; configuration in the example appsettings;
+startup writes a banner line. Test: `dotnet run` produces
+`logs/app-YYYY-MM-DD.log` with the banner entry.
 
 PAT note: each session, user provides a short-lived PAT for the repo.
