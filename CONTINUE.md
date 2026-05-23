@@ -4,22 +4,21 @@
 
 ## Where we are
 
-**Phase 2 complete (with rollup).** All 4 chunks plus docs rollup
-done. Identity admin surface (Users + User Groups) is fully built with
-cross-table business rules enforced in repository SQL. Next: Phase 3
-/ Chunk 1 (RequiredDocumentsLibrary repository).
+**Phase 3 in progress.** Chunk 1 done (DocumentType repository with
+delete-when-unreferenced rule). Next: Phase 3 / Chunk 2 (Required
+Documents Library admin page).
 
 Read these to get oriented:
-- `docs/PLAN.md` — the phase/chunk roadmap. **Next step is Phase 3 / Chunk 1.**
+- `docs/PLAN.md` — the phase/chunk roadmap. **Next step is Phase 3 / Chunk 2.**
 - `docs/data-model.sql` — the reviewed schema.
 - `docs/CONCEPT.md` — design intent. §3.3 reflects the Settings,
   User Groups, and Users admin pages; §3.1 and §3.2 still scheduled
   for refresh in Phase 6 / Phase 9.
 - `BUILD.md` — how to build/run locally. "What's currently built
   (Phases 1-2)" summarises the shipped surface.
-- `LessonsLearned.md` — running log of gotchas. Six entries (Phase 2
-  added the cross-table-rules-in-SQL convention with its rationale
-  and the no-op-transition footgun).
+- `LessonsLearned.md` — running log of gotchas. Six entries (the
+  Phase 2 cross-table-rules entry now also covers Phase 3 Chunk 1's
+  delete rule, same pattern).
 - `docs/REMOVE-BEFORE-PROD.md` — debug identity shim cutover checklist.
 
 ## Approach rules (locked in during design)
@@ -107,17 +106,16 @@ and `dotnet test`, reports back.
 
 ## Suggested next session
 
-**Phase 3 / Chunk 1 — RequiredDocumentsLibrary repository.**
+**Phase 3 / Chunk 2 — Required Documents Library admin page.**
 
-Per `docs/PLAN.md` Phase 3 Chunk 1: Dapper-based repository for the
-`required_documents_library` table — the catalog of document types
-that Request Types will later pick from. Same shape as the Phase 2
-repositories: domain entity, interface with result-enum returns,
-Dapper impl, integration tests using the `_test_` prefix + cleanup
-pattern. Schema reminder: `id, name, description, file_type_required
-(display-hint only), is_active`.
+Per `docs/PLAN.md` Phase 3 Chunk 2: `/admin/required-documents` route.
+MudTable list + New/Edit dialog + Delete button (with confirmation).
+Same pattern as the Phase 2 admin pages. Maps Create/Update/Delete
+outcomes to distinct snackbar messages — including the
+`RejectedReferenced` case for delete attempts on doc types referenced
+by Request Type versions.
 
-Then Phase 3 / Chunk 2: a list+create+edit admin page, same pattern as
-the Phase 2 admin pages.
+After this chunk, Phase 3 wraps with a docs rollup, then Phase 4
+begins (Request Types, the largest phase so far with 9 chunks).
 
 PAT note: each session, user provides a short-lived PAT for the repo.

@@ -137,14 +137,28 @@ If a test crashes mid-flight some cleanup may be needed:
   original value `5`) as a probe and restore its value in `finally`. If
   this gets left modified, re-run the §16 INSERT from `data-model.sql`
   or fix the key by hand.
-- **UserGroup tests** create fresh rows in both `dbo.user_groups` and
-  `dbo.users` with `_test_`-prefixed names and hard-delete them in
-  `finally`. Stray rows are harmless leftovers. Cleanup query if needed:
+- **UserGroup + User tests** create fresh rows in `dbo.user_groups`
+  and `dbo.users` with `_test_`-prefixed names and hard-delete them in
+  `finally`. Stray rows are harmless leftovers.
+- **DocumentType tests** create rows in `dbo.required_documents_library`,
+  and the delete-rejection test also stands up rows in `dbo.request_types`,
+  `dbo.request_type_versions`, and `dbo.request_type_required_documents`.
+  All `_test_`-prefixed; FK order matters for cleanup.
+
+Cleanup query if needed (run in FK-safe order):
+
   ```sql
-  DELETE FROM dbo.users       WHERE entraid LIKE '_test_%';
-  DELETE FROM dbo.user_groups WHERE name    LIKE '_test_%';
+  DELETE FROM dbo.request_type_required_documents
+   WHERE required_document_library_id IN
+       (SELECT id FROM dbo.required_documents_library WHERE name LIKE '_test_%');
+  DELETE FROM dbo.request_type_versions
+   WHERE request_type_id IN
+       (SELECT id FROM dbo.request_types WHERE name LIKE '_test_%');
+  DELETE FROM dbo.request_types          WHERE name    LIKE '_test_%';
+  DELETE FROM dbo.required_documents_library WHERE name LIKE '_test_%';
+  DELETE FROM dbo.users                  WHERE entraid LIKE '_test_%';
+  DELETE FROM dbo.user_groups            WHERE name    LIKE '_test_%';
   ```
-  Delete users first to avoid FK violations.
 
 ## Solution layout
 
