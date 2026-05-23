@@ -1,5 +1,6 @@
 using MudBlazor.Services;
 using Serilog;
+using VendorSure.Infrastructure;
 using VendorSure.UI.Components;
 
 // Bootstrap logger: catches anything that explodes before host config is read.
@@ -26,6 +27,9 @@ try
         .AddInteractiveServerComponents();
 
     builder.Services.AddMudServices();
+
+    // Connection factory + startup reachability check.
+    builder.Services.AddVendorSureInfrastructure(builder.Configuration);
 
     var app = builder.Build();
 

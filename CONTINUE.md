@@ -4,17 +4,17 @@
 
 ## Where we are
 
-**Phase 1 in progress.** Chunks 1 and 2 done (solution scaffold +
-MudBlazor, Serilog file logging). Next: Chunk 3 (DB connection factory +
-startup reachability check).
+**Phase 1 in progress.** Chunks 1-3 done (solution scaffold + MudBlazor,
+Serilog file logging, DB connection factory + startup reachability check).
+Next: Chunk 4 (Debug identity shim).
 
 Read these to get oriented:
-- `docs/PLAN.md` — the phase/chunk roadmap. **Next step is Phase 1 / Chunk 3.**
+- `docs/PLAN.md` — the phase/chunk roadmap. **Next step is Phase 1 / Chunk 4.**
 - `docs/data-model.sql` — the reviewed schema.
 - `docs/CONCEPT.md` — design intent (§3.1 and §3.2 are stale; refreshed in
   Phase 6 / Phase 9).
 - `BUILD.md` — how to build/run locally. Current state: scaffold + MudBlazor
-  + Serilog.
+  + Serilog + DB connection factory.
 - `LessonsLearned.md` — running log of gotchas. Two entries so far.
 - `docs/REMOVE-BEFORE-PROD.md` — cutover checklist (skeleton).
 
@@ -103,12 +103,13 @@ and `dotnet test`, reports back.
 
 ## Suggested next session
 
-**Phase 1 / Chunk 3 — DB connection factory + startup reachability check.**
+**Phase 1 / Chunk 4 — Debug identity shim.**
 
-Per `docs/PLAN.md` Phase 1 Chunk 3: `IDbConnectionFactory` interface in
-Services; `SqlConnectionFactory` impl in Infrastructure using
-`Microsoft.Data.SqlClient`. Connection string read from `appsettings.json`
-via `IOptions<T>`. Startup runs a `SELECT 1` and logs "connected to
-VenSure" or "DB unreachable: <reason>". App still boots either way.
+Per `docs/PLAN.md` Phase 1 Chunk 4: reads `Debug.Identity.Enabled` and
+`Debug.Identity.Entraid` from `appsettings.json`. Looks up the matching
+`users` row by `entraid` and stamps the principal. Refuses to load if
+`Environment = Production`. All files under
+`VendorSure.UI/Authentication/Debug/` tagged with `REMOVE-BEFORE-PROD`
+comments. `docs/REMOVE-BEFORE-PROD.md` gets its first entries.
 
 PAT note: each session, user provides a short-lived PAT for the repo.

@@ -17,11 +17,18 @@
 1. Clone the repo.
 
 2. Copy `src/VendorSure.UI/appsettings.example.json` →
-   `src/VendorSure.UI/appsettings.json` and fill in any environment-specific
-   values. The example carries the Serilog configuration block (file sink,
-   daily rolling, 30-day retention) which the app needs to start; for now
-   that's the entire file. Later chunks add a connection string, the debug
-   identity shim, etc.
+   `src/VendorSure.UI/appsettings.json` and fill in the connection string
+   under `ConnectionStrings.VenSure`. Typical local-dev forms:
+
+   ```
+   Server=localhost;Database=VenSure;Trusted_Connection=True;TrustServerCertificate=True;
+   Server=localhost\SQLEXPRESS;Database=VenSure;Trusted_Connection=True;TrustServerCertificate=True;
+   Server=devsqlbox.mycorp.com;Database=VenSure;User Id=sa;Password=...;TrustServerCertificate=True;
+   ```
+
+   The `TrustServerCertificate=True` part is needed for local SQL Server
+   installs that use a self-signed cert. For a corporate dev server with a
+   proper cert, you can drop it.
 
 3. Restore packages and build:
 
@@ -75,19 +82,30 @@ Serilog writes to `logs/app-YYYY-MM-DD.log` in the working directory (next
 to the `VendorSure.UI` binary at runtime). Daily rolling, 30-day retention.
 The console sink also writes to stdout while the app is in the foreground.
 
-Sample startup banner you should see in the log:
+Sample startup banner you should see in the log (order is approximate —
+hosted services run during `app.Run()` so the DB line may interleave with
+the ready line):
 
 ```
 [HH:MM:SS INF] VendorSure UI starting up
 [HH:MM:SS INF] VendorSure UI ready — environment Development
+[HH:MM:SS INF] Connected to VenSure database (server=..., database=VenSure)
 ```
+
+If the connection string is missing or the database is unreachable, you'll
+see an error line instead of the "Connected to VenSure" message, but the
+app still boots (so the operator can read the log and fix it).
 
 ## Schema changes
 
-`docs/data-model.sql` is the source of truth for the DB schema. When the
-schema changes, edit this file and apply the change manually to your dev
-DB. There is no migration runner — single-developer, single-dev-DB, no
-production deploy in scope.
+`docs/data-model.sql` is the source of truth for the DB schema. Before the
+app can connect cleanly, the `VenSure` database must exist on your SQL
+Server and the contents of `data-model.sql` must have been applied to it
+(via SSMS, sqlcmd, or your tool of choice).
+
+When the schema changes, edit `data-model.sql` in the repo and apply the
+change manually to your dev DB. There is no migration runner —
+single-developer, single-dev-DB, no production deploy in scope.
 
 ## Sandbox / agent build limitations
 

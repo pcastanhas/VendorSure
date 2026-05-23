@@ -1,0 +1,26 @@
+using Microsoft.Extensions.Configuration;
+using Microsoft.Extensions.DependencyInjection;
+using VendorSure.Infrastructure.Data;
+using VendorSure.Services.Data;
+
+namespace VendorSure.Infrastructure;
+
+/// <summary>
+/// Single entry point the host app uses to wire up Infrastructure-layer
+/// services. Keeps the UI / Workers ignorant of concrete implementations.
+/// </summary>
+public static class ServiceCollectionExtensions
+{
+    public static IServiceCollection AddVendorSureInfrastructure(
+        this IServiceCollection services,
+        IConfiguration configuration)
+    {
+        services.Configure<DatabaseOptions>(
+            configuration.GetSection(DatabaseOptions.SectionName));
+
+        services.AddSingleton<IDbConnectionFactory, SqlConnectionFactory>();
+        services.AddHostedService<DatabaseReachabilityCheck>();
+
+        return services;
+    }
+}

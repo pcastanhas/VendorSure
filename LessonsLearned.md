@@ -37,3 +37,27 @@ build of every chunk happens on the developer's machine after `git pull`.
 Round-trip is: agent commits → developer pulls, builds, reports
 errors/output → agent fixes. This is captured in BUILD.md and is the
 working model for all subsequent chunks.
+
+## 2026-05-23 — DI singleton ctors are not "fail fast at startup"
+
+In Chunk 3 I almost shipped a `SqlConnectionFactory` that validated the
+connection string in its constructor, on the theory that this would fail
+fast at startup if the string was missing. It would have — but in a way
+that defeats the "app boots either way" requirement of Chunk 3, because
+the DI container resolves singletons lazily on first request, and the
+first request happens during the startup hosted-service's *construction*,
+before that service's own try/catch can guard against it. Net effect: a
+missing connection string would crash the host before the reachability
+check could log anything.
+
+Fix: resolve the connection string inside `CreateOpenConnectionAsync`
+instead. Now a missing string only throws when something actually asks for
+a connection. The reachability check's existing try/catch in `StartAsync`
+catches it, logs the error, and `StartAsync` returns cleanly so the host
+finishes booting. The app comes up; the operator reads the log; they fix
+the configuration.
+
+Lesson: if you want a startup health surface that "logs but doesn't
+crash," the DI graph that feeds it must also be tolerant of bad config —
+otherwise the construction failure happens before any try/catch you wrote
+can run. Lazy resolution at the lowest level is the cleanest answer.
