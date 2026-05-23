@@ -6,20 +6,19 @@
 
 **Phase 1 complete.** All 7 chunks done (solution scaffold + MudBlazor,
 Serilog file logging, DB connection factory, debug identity shim, Settings
-repository with tests, Settings list page, Settings edit dialog). Next:
-phase-end docs commit (BUILD, CONCEPT if affected, LessonsLearned, PLAN),
-then start Phase 2 (Users + User Groups admin).
+repository with tests, Settings list page, Settings edit dialog), plus
+the post-Chunk-7 render-mode-cascade fix. Next: Phase 2 / Chunk 1
+(UserGroup repository).
 
 Read these to get oriented:
-- `docs/PLAN.md` — the phase/chunk roadmap. **Next step is the Phase 1
-  docs-rollup commit, then Phase 2 / Chunk 1.**
+- `docs/PLAN.md` — the phase/chunk roadmap. **Next step is Phase 2 / Chunk 1.**
 - `docs/data-model.sql` — the reviewed schema.
-- `docs/CONCEPT.md` — design intent (§3.1 and §3.2 are stale; refreshed in
-  Phase 6 / Phase 9).
-- `BUILD.md` — how to build/run locally. Phase 1 surface: scaffold,
-  MudBlazor, Serilog, DB, debug identity, full Settings admin (list +
-  edit).
-- `LessonsLearned.md` — running log of gotchas. Four entries so far.
+- `docs/CONCEPT.md` — design intent. §3.3 updated to reflect the Settings
+  admin pattern; §3.1 and §3.2 are still stale for the original reasons
+  (refreshed in Phase 6 / Phase 9).
+- `BUILD.md` — how to build/run locally. Includes a "What's currently
+  built (Phase 1)" summary.
+- `LessonsLearned.md` — running log of gotchas. Five entries so far.
 - `docs/REMOVE-BEFORE-PROD.md` — debug identity shim cutover checklist.
 
 ## Approach rules (locked in during design)
@@ -107,13 +106,18 @@ and `dotnet test`, reports back.
 
 ## Suggested next session
 
-**Phase 1 docs rollup, then Phase 2 / Chunk 1 (Users repository).**
+**Phase 2 / Chunk 1 — UserGroup repository.**
 
-Per the locked-in approach rules: at the end of every phase, do one
-commit covering `BUILD.md`, `CONCEPT.md` (if affected),
-`LessonsLearned.md`, `PLAN.md`, and `CONTINUE.md` — pulling everything
-into sync before the next phase starts. Phase 2 then begins with the
-Users repository (mirror of the Settings repository pattern from
-Chunk 5: domain, interface, Dapper impl, tests).
+Per `docs/PLAN.md` Phase 2 Chunk 1: Dapper-based repository for the
+`user_groups` table. Domain entity in `VendorSure.Domain.Identity` (sits
+next to `User.cs`), interface in `VendorSure.Services.Identity`, impl
+in `VendorSure.Infrastructure.Identity`. CRUD: list, get by id, create,
+update, deactivate. Tests in `VendorSure.Infrastructure.Tests`
+following the `SettingsRepositoryTests` pattern (probe an existing
+seeded row, restore in `finally`).
+
+The User repository was partially built in Phase 1 / Chunk 4
+(`GetByEntraidAsync` for the debug shim). Phase 2 / Chunk 2 grows it
+with the rest of the CRUD surface.
 
 PAT note: each session, user provides a short-lived PAT for the repo.

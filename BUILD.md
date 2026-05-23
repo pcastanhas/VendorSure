@@ -8,9 +8,30 @@
 - A **SQL Server** reachable from your dev machine. Local Express, remote
   dev box, or container — all fine. The DB name should be `VenSure` to
   match what `data-model.sql` expects.
-- The `VenSure` database created and `docs/data-model.sql` applied against
-  it. From Chunk 3 onwards the app talks to the DB at startup (reachability
-  check); from Chunk 4 onwards it also queries the `users` table.
+- The `VenSure` database created and `docs/data-model.sql` applied
+  against it. The app pings the DB at startup and queries the `users`
+  table on the first request; both need to work for the app to come up
+  signed in.
+
+## What's currently built (Phase 1)
+
+End-to-end surface as of the Phase 1 rollup:
+
+- Five `src` projects, five matching test projects, MudBlazor 9.4 shell.
+- Serilog file logging (`logs/app-YYYY-MM-DD.log`, daily rolling,
+  30-day retention) and console output.
+- DB connection factory + reachability check at startup; app boots even
+  if the DB is unreachable so the operator can fix configuration.
+- Debug identity shim (configured via `Debug:Identity` in
+  `appsettings.json`) — every request is authenticated as the
+  configured `users` row. Tagged `REMOVE-BEFORE-PROD` throughout. The
+  shim refuses to load when `ASPNETCORE_ENVIRONMENT=Production`.
+- Settings admin page at `/admin/settings` — read and edit values for
+  the rows seeded in `data-model.sql` §16. Sensitive values masked in
+  the list, reveal-toggle in the edit dialog, required-validation on
+  save.
+- Dapper repository pattern (SELECT-with-explicit-`AS PascalCase`
+  aliases) — established here for everything that follows.
 
 ## First-time setup
 

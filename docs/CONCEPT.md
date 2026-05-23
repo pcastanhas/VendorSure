@@ -80,6 +80,13 @@ The prompt is what the system uses at runtime. The decision tree is the source o
 Where Compliance and admins configure the system. Gated by `user.is_admin = true`.
 
 - Azure / Entra-style admin shell — left navigation with admin functions. "Request Types" is one such function; others are TBD.
+- **Settings** — the first admin section built (Phase 1). System-wide
+  configuration rows from the `settings` table, edited in a `MudTable` +
+  `MudDialog` pattern: list view with sensitive values masked, edit
+  dialog with reveal-toggle for sensitive values, required-field
+  validation on save. This page is the template the other admin pages
+  (Users, User Groups, Required Documents Library, Request Types) will
+  follow.
 - **Request Types screen:** list of active request types. New / edit (double-click).
 - **Request Type editor:** a header section (name, created date, version, audit info) and a tabbed body. Known tabs so far:
   - **Workflows** — the workflows that can service this request type. Clicking a workflow opens the workflow designer.

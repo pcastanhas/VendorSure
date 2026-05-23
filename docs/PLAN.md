@@ -31,12 +31,17 @@
 
 ---
 
-## Phase 1 — Foundation + Settings admin page
+## Phase 1 — Foundation + Settings admin page ✓ COMPLETE
 
 **Goal.** A logged-in (debug-shim) user can navigate to a Settings page, see
 the seeded settings rows, and edit values. All foundation infrastructure
 (solution structure, logging, DB connection, identity, MudBlazor shell) is
 in place.
+
+**Outcome:** all seven chunks shipped. The Settings admin surface works
+end-to-end (list, edit-via-dialog, snackbar, refresh). Render-mode
+cascade trap discovered and fixed in a post-Chunk-7 patch (see
+`LessonsLearned.md`). Phase 1 rollup commits this section.
 
 ### Chunks
 
@@ -113,8 +118,11 @@ are editable.
 
 1. **UserGroup repository.** CRUD methods. Tests against dev DB.
 
-2. **User repository.** CRUD methods, including by `entraid`. Tests against
-   dev DB.
+2. **User repository — expand to CRUD.** Phase 1 / Chunk 4 added the
+   `User` domain entity and `IUserRepository.GetByEntraidAsync` to
+   support the debug identity shim. This chunk grows the same interface
+   with the rest of the CRUD surface (list, get by id, create, update,
+   deactivate) and a Dapper impl to match. Tests against dev DB.
 
 3. **User Groups list + create + edit page.** `/admin/user-groups`. MudTable,
    dialog for new/edit, all four bit fields rendered as switches.
