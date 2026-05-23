@@ -15,11 +15,13 @@ namespace VendorSure.Infrastructure.Tests.RequestTypes;
 public sealed class RequestTypeRepositoryTests : IClassFixture<InfrastructureTestFixture>
 {
     private readonly IRequestTypeRepository _types;
+    private readonly IRequestTypeVersionRepository _versions;
     private readonly IDbConnectionFactory _connectionFactory;
 
     public RequestTypeRepositoryTests(InfrastructureTestFixture fixture)
     {
         _types = fixture.ServiceProvider.GetRequiredService<IRequestTypeRepository>();
+        _versions = fixture.ServiceProvider.GetRequiredService<IRequestTypeVersionRepository>();
         _connectionFactory = fixture.ServiceProvider.GetRequiredService<IDbConnectionFactory>();
     }
 
@@ -268,6 +270,138 @@ public sealed class RequestTypeRepositoryTests : IClassFixture<InfrastructureTes
                 await DeleteTypeAsync(existingId);
             }
         }
+    }
+
+    [Fact]
+    public async Task ListWithVersionInfoAsync_returns_nulls_for_type_with_no_versions()
+    {
+        // Plain CreateAsync (not the convenience method), so no version row
+        // is created — only the type. The projection should still surface
+        // the row, with all version fields null/0.
+        var type = NewTestType();
+        int newId = 0;
+        try
+        {
+            newId = (await _types.CreateAsync(type)).Id!.Value;
+
+            var list = await _types.ListWithVersionInfoAsync();
+            var item = Assert.Single(list, i => i.Type.Id == newId);
+            Assert.Null(item.InServiceVersion);
+            Assert.Null(item.DraftVersion);
+            Assert.Equal(0, item.SupersededCount);
+        }
+        finally
+        {
+            if (newId > 0) await DeleteTypeAsync(newId);
+        }
+    }
+
+    [Fact]
+    public async Task ListWithVersionInfoAsync_surfaces_draft_version_when_present()
+    {
+        // CreateWithFirstDraftAsync creates a v1 Draft alongside the type.
+        var type = NewTestType();
+        int newId = 0;
+        try
+        {
+            var result = await _types.CreateWithFirstDraftAsync(type);
+            newId = result.RequestTypeId!.Value;
+
+            var list = await _types.ListWithVersionInfoAsync();
+            var item = Assert.Single(list, i => i.Type.Id == newId);
+            Assert.Null(item.InServiceVersion);
+            Assert.Equal(1, item.DraftVersion);
+            Assert.Equal(0, item.SupersededCount);
+        }
+        finally
+        {
+            if (newId > 0)
+            {
+                await DeleteVersionsForTypeAsync(newId);
+                await DeleteTypeAsync(newId);
+            }
+        }
+    }
+
+    [Fact]
+    public async Task ListWithVersionInfoAsync_surfaces_each_state_when_versions_exist_for_each()
+    {
+        // Stand up a type with three versions: v1 Superseded, v2 InService,
+        // v3 Draft. Force the states via raw SQL since the legitimate
+        // transition path is in Chunk 9.
+        var type = NewTestType();
+        int newId = 0;
+        try
+        {
+            // Create the type and three drafts via the version repository.
+            var withDraft = await _types.CreateWithFirstDraftAsync(type);
+            newId = withDraft.RequestTypeId!.Value;
+            var v1Id = withDraft.VersionId!.Value;
+            var v2Id = (await _versions.CreateDraftAsync(newId)).Id!.Value;
+            _ = (await _versions.CreateDraftAsync(newId)).Id!.Value;  // v3 — stays Draft, no reference needed
+
+            await ForceVersionStateAsync(v1Id, RequestStateCodes.Superseded);
+            await ForceVersionStateAsync(v2Id, RequestStateCodes.InService);
+            // v3 stays Draft (default).
+
+            var list = await _types.ListWithVersionInfoAsync();
+            var item = Assert.Single(list, i => i.Type.Id == newId);
+            Assert.Equal(2, item.InServiceVersion);
+            Assert.Equal(3, item.DraftVersion);
+            Assert.Equal(1, item.SupersededCount);
+        }
+        finally
+        {
+            if (newId > 0)
+            {
+                await DeleteVersionsForTypeAsync(newId);
+                await DeleteTypeAsync(newId);
+            }
+        }
+    }
+
+    [Fact]
+    public async Task ListWithVersionInfoAsync_orders_by_name()
+    {
+        var a = new RequestType
+        {
+            Name = "_test_rt_AAA_" + Guid.NewGuid().ToString("N"),
+            IsExplanationRequired = false,
+            IsActive = true,
+        };
+        var z = new RequestType
+        {
+            Name = "_test_rt_ZZZ_" + Guid.NewGuid().ToString("N"),
+            IsExplanationRequired = false,
+            IsActive = true,
+        };
+        int idA = 0, idZ = 0;
+        try
+        {
+            // Insert in reverse order; expect A before Z in the result.
+            idZ = (await _types.CreateAsync(z)).Id!.Value;
+            idA = (await _types.CreateAsync(a)).Id!.Value;
+
+            var list = await _types.ListWithVersionInfoAsync();
+            var indexOfA = list.ToList().FindIndex(i => i.Type.Id == idA);
+            var indexOfZ = list.ToList().FindIndex(i => i.Type.Id == idZ);
+            Assert.True(indexOfA < indexOfZ);
+        }
+        finally
+        {
+            if (idA > 0) await DeleteTypeAsync(idA);
+            if (idZ > 0) await DeleteTypeAsync(idZ);
+        }
+    }
+
+    // ---- additional helpers for the version-state tests ----------------
+
+    private async Task ForceVersionStateAsync(int versionId, string stateCode)
+    {
+        using var connection = await _connectionFactory.CreateOpenConnectionAsync();
+        await connection.ExecuteAsync(
+            "UPDATE dbo.request_type_versions SET request_state = @stateCode WHERE id = @versionId;",
+            new { versionId, stateCode });
     }
 
     // ---- helpers --------------------------------------------------------

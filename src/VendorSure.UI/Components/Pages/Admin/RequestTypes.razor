@@ -1,0 +1,209 @@
+@page "/admin/request-types"
+@attribute [Authorize]
+
+@using Microsoft.AspNetCore.Authorization
+@using VendorSure.Domain.RequestTypes
+@using VendorSure.Services.RequestTypes
+
+@inject IRequestTypeRepository TypeRepository
+@inject IDialogService DialogService
+@inject ISnackbar Snackbar
+@inject NavigationManager Navigation
+@inject ILogger<RequestTypes> Logger
+
+<PageTitle>Request Types — VendorSure</PageTitle>
+
+<MudStack Row="true" AlignItems="AlignItems.Center" Class="mb-4">
+    <MudStack Spacing="0">
+        <MudText Typo="Typo.h4">Request Types</MudText>
+        <MudText Typo="Typo.body2" Class="mud-text-secondary">
+            The kinds of vendor requests the system accepts. Each type
+            carries one or more versions; submissions bind to the version
+            that's In Service at the moment of submit.
+        </MudText>
+    </MudStack>
+    <MudSpacer />
+    <MudButton Variant="Variant.Filled"
+               Color="Color.Primary"
+               StartIcon="@Icons.Material.Filled.Add"
+               OnClick="OpenCreateDialog">
+        New request type
+    </MudButton>
+</MudStack>
+
+<MudTable Items="@_items"
+          Dense="true"
+          Hover="true"
+          Loading="@_loading"
+          LoadingProgressColor="Color.Primary"
+          Elevation="1">
+    <HeaderContent>
+        <MudTh>Name</MudTh>
+        <MudTh Style="width: 90px; text-align: center;">Active</MudTh>
+        <MudTh Style="width: 130px; text-align: center;">In service</MudTh>
+        <MudTh Style="width: 110px; text-align: center;">Draft</MudTh>
+        <MudTh Style="width: 130px; text-align: center;">Superseded</MudTh>
+        <MudTh Style="width: 64px;"></MudTh>
+    </HeaderContent>
+    <RowTemplate>
+        <MudTd DataLabel="Name">
+            @if (!context.Type.IsActive)
+            {
+                <span class="mud-text-disabled">@context.Type.Name</span>
+                <MudChip T="string" Size="Size.Small" Color="Color.Default" Class="ml-2" Variant="Variant.Outlined">Inactive</MudChip>
+            }
+            else
+            {
+                @context.Type.Name
+            }
+            @if (context.Type.IsExplanationRequired)
+            {
+                <MudTooltip Text="Submitter must enter free-form explanation when submitting.">
+                    <MudIcon Icon="@Icons.Material.Filled.NoteAlt"
+                             Color="Color.Secondary"
+                             Size="Size.Small"
+                             Class="ml-2" />
+                </MudTooltip>
+            }
+        </MudTd>
+        <MudTd DataLabel="Active" Style="text-align: center;">
+            @if (context.Type.IsActive)
+            {
+                <MudIcon Icon="@Icons.Material.Filled.Check" Color="Color.Success" Size="Size.Small" />
+            }
+        </MudTd>
+        <MudTd DataLabel="In service" Style="text-align: center;">
+            @if (context.InServiceVersion is int inSvc)
+            {
+                <MudChip T="string" Color="Color.Success" Size="Size.Small" Variant="Variant.Text">v@(inSvc)</MudChip>
+            }
+            else
+            {
+                <span class="mud-text-disabled">—</span>
+            }
+        </MudTd>
+        <MudTd DataLabel="Draft" Style="text-align: center;">
+            @if (context.DraftVersion is int draft)
+            {
+                <MudChip T="string" Color="Color.Warning" Size="Size.Small" Variant="Variant.Text">v@(draft)</MudChip>
+            }
+            else
+            {
+                <span class="mud-text-disabled">—</span>
+            }
+        </MudTd>
+        <MudTd DataLabel="Superseded" Style="text-align: center;">
+            @if (context.SupersededCount > 0)
+            {
+                @context.SupersededCount
+            }
+            else
+            {
+                <span class="mud-text-disabled">—</span>
+            }
+        </MudTd>
+        <MudTd>
+            <MudIconButton Icon="@Icons.Material.Filled.OpenInNew"
+                           Size="Size.Small"
+                           OnClick="@(() => OpenDetail(context.Type.Id))"
+                           aria-label="@($"Open {context.Type.Name}")" />
+        </MudTd>
+    </RowTemplate>
+    <NoRecordsContent>
+        <MudText>No request types yet. Click "New request type" to create one.</MudText>
+    </NoRecordsContent>
+    <LoadingContent>
+        <MudText>Loading…</MudText>
+    </LoadingContent>
+</MudTable>
+
+@code {
+    private IReadOnlyList<RequestTypeListItem> _items = Array.Empty<RequestTypeListItem>();
+    private bool _loading = true;
+
+    protected override async Task OnInitializedAsync() => await LoadAsync();
+
+    private async Task LoadAsync()
+    {
+        _loading = true;
+        try
+        {
+            _items = await TypeRepository.ListWithVersionInfoAsync();
+        }
+        catch (Exception ex)
+        {
+            Logger.LogError(ex, "Failed to load request types.");
+            _items = Array.Empty<RequestTypeListItem>();
+            Snackbar.Add("Failed to load request types. Check the log for details.", Severity.Error);
+        }
+        finally
+        {
+            _loading = false;
+        }
+    }
+
+    private async Task OpenCreateDialog()
+    {
+        var options = new DialogOptions
+        {
+            CloseOnEscapeKey = true,
+            MaxWidth = MaxWidth.Small,
+            FullWidth = true,
+        };
+
+        var dialog = await DialogService.ShowAsync<CreateRequestTypeDialog>(
+            "New request type", options);
+        var result = await dialog.Result;
+        if (result is null || result.Canceled) return;
+
+        if (result.Data is not RequestType type)
+        {
+            Logger.LogWarning(
+                "Create dialog returned unexpected data type {Type}.",
+                result.Data?.GetType().Name ?? "null");
+            return;
+        }
+
+        await CreateAsync(type);
+    }
+
+    private async Task CreateAsync(RequestType type)
+    {
+        try
+        {
+            // CreateWithFirstDraftAsync — atomic type + v1 Draft.
+            var result = await TypeRepository.CreateWithFirstDraftAsync(type);
+            switch (result.Outcome)
+            {
+                case CreateRequestTypeOutcome.Created:
+                    Logger.LogInformation(
+                        "Request type '{Name}' created (id={Id}, version_id={VersionId}) by admin UI.",
+                        type.Name, result.RequestTypeId, result.VersionId);
+                    Snackbar.Add($"Created {type.Name}.", Severity.Success);
+                    await LoadAsync();
+                    break;
+
+                case CreateRequestTypeOutcome.RejectedNameConflict:
+                    Logger.LogWarning(
+                        "Create rejected: request type name '{Name}' already in use.", type.Name);
+                    Snackbar.Add(
+                        $"Cannot create '{type.Name}': another request type already has that name.",
+                        Severity.Error);
+                    break;
+            }
+        }
+        catch (Exception ex)
+        {
+            Logger.LogError(ex, "Failed to create request type '{Name}'.", type.Name);
+            Snackbar.Add($"Failed to create {type.Name}: {ex.Message}", Severity.Error);
+        }
+    }
+
+    private void OpenDetail(int id)
+    {
+        // The destination route /admin/request-types/{id} doesn't exist
+        // until Chunk 5 — clicking lands on a 404 right now. Setting the
+        // navigation pattern here so Chunk 5 only has to add the page.
+        Navigation.NavigateTo($"/admin/request-types/{id}");
+    }
+}

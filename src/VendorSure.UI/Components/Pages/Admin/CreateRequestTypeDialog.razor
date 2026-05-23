@@ -1,0 +1,79 @@
+@*
+    Create-only dialog for new Request Types.
+
+    Type-level fields ONLY — name + IsExplanationRequired. The
+    new type starts active by definition; deactivation lives on
+    the detail page (Chunk 5). Version-level fields (workflow
+    selection prompt, required docs, validations) are filled in
+    on the detail page's per-tab editors.
+*@
+
+@using VendorSure.Domain.RequestTypes
+
+<MudDialog>
+    <TitleContent>
+        <MudText Typo="Typo.h6">New Request Type</MudText>
+    </TitleContent>
+    <DialogContent>
+        <MudStack Spacing="3">
+            <MudTextField @bind-Value="_name"
+                          Label="Name"
+                          Variant="Variant.Outlined"
+                          Immediate="true"
+                          Error="@NameIsInvalid"
+                          ErrorText="Name is required."
+                          MaxLength="100"
+                          HelperText="Shown to submitters when picking a request type." />
+
+            <MudSwitch T="bool" @bind-Value="_isExplanationRequired" Color="Color.Primary">
+                Require submitter explanation
+            </MudSwitch>
+            <MudText Typo="Typo.caption" Class="mud-text-secondary mt-n2">
+                When on, submitters must enter free-form notes alongside
+                document uploads.
+            </MudText>
+
+            <MudDivider />
+
+            <MudText Typo="Typo.caption" Class="mud-text-secondary">
+                A Draft version 1 is created automatically. Open the new
+                type to edit its required documents, validations, and
+                workflow selection prompt.
+            </MudText>
+        </MudStack>
+    </DialogContent>
+    <DialogActions>
+        <MudButton OnClick="Cancel">Cancel</MudButton>
+        <MudButton Color="Color.Primary"
+                   Variant="Variant.Filled"
+                   OnClick="Save"
+                   Disabled="@NameIsInvalid">
+            Create
+        </MudButton>
+    </DialogActions>
+</MudDialog>
+
+@code {
+    [CascadingParameter] private IMudDialogInstance MudDialog { get; set; } = default!;
+
+    private string _name = string.Empty;
+    private bool _isExplanationRequired;
+
+    private bool NameIsInvalid => string.IsNullOrWhiteSpace(_name);
+
+    private void Cancel() => MudDialog.Cancel();
+
+    private void Save()
+    {
+        if (NameIsInvalid) return;
+
+        var result = new RequestType
+        {
+            Id = 0,
+            Name = _name.Trim(),
+            IsExplanationRequired = _isExplanationRequired,
+            IsActive = true,
+        };
+        MudDialog.Close(DialogResult.Ok(result));
+    }
+}

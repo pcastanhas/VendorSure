@@ -31,6 +31,64 @@ internal sealed class RequestTypeRepository : IRequestTypeRepository
         return rows.ToList();
     }
 
+    public async Task<IReadOnlyList<RequestTypeListItem>> ListWithVersionInfoAsync(
+        CancellationToken ct = default)
+    {
+        // One query, conditional aggregation: per type, find the version
+        // numbers of any rows in 'I' / 'D' state and the count in 'S'.
+        // MAX() over a CASE returning the version-or-null collapses to
+        // 'the highest matching version, or NULL if none' which is exactly
+        // what the projection wants.
+        //
+        // LEFT JOIN so types with zero versions still appear (e.g. a brand-
+        // new type before its initial Draft was created, though
+        // CreateWithFirstDraftAsync makes that an edge case rather than
+        // the norm).
+        const string sql = @"
+            SELECT
+                t.id                        AS Id,
+                t.name                      AS Name,
+                t.is_explanation_required   AS IsExplanationRequired,
+                t.is_active                 AS IsActive,
+                MAX(CASE WHEN v.request_state = 'I' THEN v.version END) AS InServiceVersion,
+                MAX(CASE WHEN v.request_state = 'D' THEN v.version END) AS DraftVersion,
+                SUM(CASE WHEN v.request_state = 'S' THEN 1 ELSE 0 END)  AS SupersededCount
+            FROM dbo.request_types t
+            LEFT JOIN dbo.request_type_versions v
+                ON v.request_type_id = t.id
+            GROUP BY t.id, t.name, t.is_explanation_required, t.is_active
+            ORDER BY t.name;";
+
+        using var connection = await _connectionFactory.CreateOpenConnectionAsync(ct);
+        var command = new CommandDefinition(sql, cancellationToken: ct);
+        var rows = await connection.QueryAsync<ListItemRow>(command);
+
+        return rows.Select(r => new RequestTypeListItem(
+            new RequestType
+            {
+                Id = r.Id,
+                Name = r.Name,
+                IsExplanationRequired = r.IsExplanationRequired,
+                IsActive = r.IsActive,
+            },
+            r.InServiceVersion,
+            r.DraftVersion,
+            r.SupersededCount)).ToList();
+    }
+
+    // Flat shape Dapper materialises into for ListWithVersionInfoAsync.
+    // Private — one-off projection, not a domain concept.
+    private sealed class ListItemRow
+    {
+        public int Id { get; init; }
+        public string Name { get; init; } = string.Empty;
+        public bool IsExplanationRequired { get; init; }
+        public bool IsActive { get; init; }
+        public int? InServiceVersion { get; init; }
+        public int? DraftVersion { get; init; }
+        public int SupersededCount { get; init; }
+    }
+
     public async Task<RequestType?> GetByIdAsync(int id, CancellationToken ct = default)
     {
         var sql = $"SELECT {SelectColumns} FROM dbo.request_types WHERE id = @id;";
