@@ -108,11 +108,32 @@ cascade trap discovered and fixed in a post-Chunk-7 patch (see
 
 ---
 
-## Phase 2 — Users + User Groups admin pages
+## Phase 2 — Users + User Groups admin pages ✓ COMPLETE
 
 **Goal.** Admin can list, create, edit users and user groups. Group permission
 flags (`can_restart_workflow`, `can_change_workflow`, `can_submit_requests`)
 are editable.
+
+**Outcome:** all four chunks shipped. Three patterns emerged worth naming
+for the chunks that follow:
+
+- **Cross-table business rules go in repository SQL.** Each rule lives
+  in the WHERE clause of its mutating statement (UPDATE / conditional
+  INSERT) so it's enforced atomically with no race window. When the
+  rule rejects, focused existence probes disambiguate the rejection
+  reason from a generic "not found." See `LessonsLearned.md` for the
+  rationale and the deactivation-transition footgun caught during
+  Chunk 1.
+- **Result enums for expected CRUD outcomes.** Operations that have
+  multiple expected outcomes (created / not-found / rejected-X /
+  rejected-Y) return an enum (and for create, a small record carrying
+  the new id) rather than throwing for non-exceptional cases. Each
+  outcome maps to its own snackbar severity in the UI.
+- **`*ListItem` projection records for list pages.** When a list view
+  needs columns from a join (group name, assigned-user count), the
+  repository exposes a dedicated `ListWith…Async` method returning a
+  small `record (Entity, projection-data)` pair. Avoids N+1 round-trips
+  and keeps Domain entities free of view-projection fields.
 
 ### Chunks
 

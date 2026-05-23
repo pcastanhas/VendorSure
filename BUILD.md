@@ -13,9 +13,11 @@
   table on the first request; both need to work for the app to come up
   signed in.
 
-## What's currently built (Phase 1)
+## What's currently built (Phases 1-2)
 
-End-to-end surface as of the Phase 1 rollup:
+End-to-end surface as of the Phase 2 rollup:
+
+**Foundation (Phase 1):**
 
 - Five `src` projects, five matching test projects, MudBlazor 9.4 shell.
 - Serilog file logging (`logs/app-YYYY-MM-DD.log`, daily rolling,
@@ -26,12 +28,27 @@ End-to-end surface as of the Phase 1 rollup:
   `appsettings.json`) — every request is authenticated as the
   configured `users` row. Tagged `REMOVE-BEFORE-PROD` throughout. The
   shim refuses to load when `ASPNETCORE_ENVIRONMENT=Production`.
+- Dapper repository pattern (SELECT-with-explicit-`AS PascalCase`
+  aliases) — established here for everything that follows.
 - Settings admin page at `/admin/settings` — read and edit values for
   the rows seeded in `data-model.sql` §16. Sensitive values masked in
   the list, reveal-toggle in the edit dialog, required-validation on
   save.
-- Dapper repository pattern (SELECT-with-explicit-`AS PascalCase`
-  aliases) — established here for everything that follows.
+
+**Identity admin (Phase 2):**
+
+- User Groups admin page at `/admin/user-groups` — list/create/edit
+  groups with permission flags. The IsActive switch is disabled when
+  the group has users assigned (rule enforced both in the UI and in
+  repository SQL).
+- Users admin page at `/admin/users` — list/create/edit users with
+  their entraid, group assignment, admin flag, active flag. Group
+  picker filters to active groups only. Distinct snackbar messages for
+  entraid collisions and inactive-group rejection (race-condition
+  fallbacks).
+- The "Local Dev" seed user and "Developers" seed group from setup
+  step 3 below now appear in the admin UI; you can edit them through
+  the pages instead of running SQL.
 
 ## First-time setup
 

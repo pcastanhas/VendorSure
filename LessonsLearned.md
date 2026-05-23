@@ -120,3 +120,56 @@ some configurations they conflict).
 For VendorSure this is fine: the entire app is admin-tooling for 5
 power users with no public surface, so there's nothing to gain from
 mixing static and interactive rendering. Set it once, everywhere, done.
+
+## 2026-05-23 — Cross-table business rules belong in repository SQL (so far)
+
+Three patterns settled in Phase 2 that future code should follow until
+they stop working. Recording all three together because they're parts
+of one philosophy: keep business rules close to the data, expressed in
+the type system, not in exceptions.
+
+**1. Rules go in the mutating statement's WHERE clause.** When the
+rule is "X can't happen if Y exists in another table," it's tempting
+to do a check query, then run the mutation. That has a race window
+between the check and the mutation. Instead, embed the check directly:
+
+```sql
+UPDATE dbo.user_groups
+SET name = @Name, is_active = @IsActive, ...
+WHERE id = @Id
+  AND (@IsActive = 1
+       OR is_active = 0
+       OR NOT EXISTS (SELECT 1 FROM dbo.users WHERE group_id = @Id));
+```
+
+If the rule rejects, `rowsAffected = 0`. To distinguish "row didn't
+exist" from "rule rejected," run focused follow-up probes — one per
+possible rejection reason, in specificity order. Two queries instead of
+one, but the rule itself is atomic.
+
+**2. The rule fires only on the relevant transition, not on no-ops.**
+The first cut of the user-group rule was "block any UPDATE with
+IsActive=0 when users are assigned." This breaks a perfectly normal
+flow: rename an already-inactive group. Fix is to add `OR is_active = 0`
+to the rule predicate — if we're not transitioning active→inactive,
+the rule doesn't apply. *Always think through what the rule does for a
+no-op write before committing the SQL.* Regression-tested.
+
+**3. Multiple expected outcomes → result enum, not exceptions.** When
+an operation has multiple expected failure modes (RejectedEntraidConflict,
+RejectedInactiveGroup, NotFound), each one is a thing the caller will
+want to react to — typically with a different UI message. Exceptions
+for these would be code smell (exceptions are for unexpected things).
+Return an enum (or a small record carrying the enum + new id for
+creates). The UI switches on it and shows the right snackbar.
+
+**Why not a service layer with the rules?** When I added the first
+cross-table rule (Chunk 1) I noted that a second rule would trigger
+factoring into a `UserGroupService`. When I shipped the second rule
+(Chunk 2) I reconsidered: each rule is a one-statement SQL check that
+lives naturally with its mutation; a service class with two delegating
+methods adds friction with no benefit. **The trigger for a service is
+a rule that needs orchestration across multiple writes, or one that
+can't be expressed in SQL** — not "we have N ≥ 2 rules." Deferred,
+explicitly. Revisit in Phase 4-5 when validation runners and workflow
+state may need genuine orchestration.

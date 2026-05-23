@@ -87,6 +87,16 @@ Where Compliance and admins configure the system. Gated by `user.is_admin = true
   validation on save. This page is the template the other admin pages
   (Users, User Groups, Required Documents Library, Request Types) will
   follow.
+- **User Groups** and **Users** — Phase 2. Both follow the Settings
+  pattern (list / new+edit dialog / snackbar / refresh) but expanded
+  for true CRUD. Two cross-table business rules are enforced in
+  repository SQL: a group cannot be deactivated while users are
+  assigned to it, and users cannot be assigned to inactive groups —
+  together they maintain the invariant "no user points at an inactive
+  group" from both directions. Each repository's update operation
+  returns a result enum so the UI can map specific rejection reasons
+  (entraid collision, inactive group, has-users) to distinct snackbar
+  messages.
 - **Request Types screen:** list of active request types. New / edit (double-click).
 - **Request Type editor:** a header section (name, created date, version, audit info) and a tabbed body. Known tabs so far:
   - **Workflows** — the workflows that can service this request type. Clicking a workflow opens the workflow designer.

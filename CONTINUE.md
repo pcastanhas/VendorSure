@@ -4,21 +4,22 @@
 
 ## Where we are
 
-**Phase 2 complete.** All 4 chunks done (UserGroup repository, User
-repository expanded to full CRUD, User Groups admin page, Users admin
-page). Next: Phase 2 docs rollup, then Phase 3 (Required Documents
-Library).
+**Phase 2 complete (with rollup).** All 4 chunks plus docs rollup
+done. Identity admin surface (Users + User Groups) is fully built with
+cross-table business rules enforced in repository SQL. Next: Phase 3
+/ Chunk 1 (RequiredDocumentsLibrary repository).
 
 Read these to get oriented:
-- `docs/PLAN.md` — the phase/chunk roadmap. **Next step is the Phase 2
-  docs-rollup commit, then Phase 3 / Chunk 1.**
+- `docs/PLAN.md` — the phase/chunk roadmap. **Next step is Phase 3 / Chunk 1.**
 - `docs/data-model.sql` — the reviewed schema.
-- `docs/CONCEPT.md` — design intent. §3.3 reflects the Settings admin
-  pattern (Phase 2 admin pages follow the same shape); §3.1 and §3.2
-  are still scheduled for refresh in Phase 6 / Phase 9.
-- `BUILD.md` — how to build/run locally. Includes a "What's currently
-  built (Phase 1)" summary that needs a Phase 2 addition in the rollup.
-- `LessonsLearned.md` — running log of gotchas. Five entries so far.
+- `docs/CONCEPT.md` — design intent. §3.3 reflects the Settings,
+  User Groups, and Users admin pages; §3.1 and §3.2 still scheduled
+  for refresh in Phase 6 / Phase 9.
+- `BUILD.md` — how to build/run locally. "What's currently built
+  (Phases 1-2)" summarises the shipped surface.
+- `LessonsLearned.md` — running log of gotchas. Six entries (Phase 2
+  added the cross-table-rules-in-SQL convention with its rationale
+  and the no-op-transition footgun).
 - `docs/REMOVE-BEFORE-PROD.md` — debug identity shim cutover checklist.
 
 ## Approach rules (locked in during design)
@@ -106,13 +107,17 @@ and `dotnet test`, reports back.
 
 ## Suggested next session
 
-**Phase 2 docs rollup, then Phase 3 / Chunk 1 (RequiredDocuments
-repository).**
+**Phase 3 / Chunk 1 — RequiredDocumentsLibrary repository.**
 
-Per the locked-in approach rules: at the end of every phase, one
-commit covering `BUILD.md`, `CONCEPT.md` (if affected),
-`LessonsLearned.md`, `PLAN.md`, and `CONTINUE.md`. Phase 3 begins with
-the RequiredDocumentsLibrary repository (Phase 3 / Chunk 1 in
-PLAN.md).
+Per `docs/PLAN.md` Phase 3 Chunk 1: Dapper-based repository for the
+`required_documents_library` table — the catalog of document types
+that Request Types will later pick from. Same shape as the Phase 2
+repositories: domain entity, interface with result-enum returns,
+Dapper impl, integration tests using the `_test_` prefix + cleanup
+pattern. Schema reminder: `id, name, description, file_type_required
+(display-hint only), is_active`.
+
+Then Phase 3 / Chunk 2: a list+create+edit admin page, same pattern as
+the Phase 2 admin pages.
 
 PAT note: each session, user provides a short-lived PAT for the repo.
