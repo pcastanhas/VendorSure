@@ -113,11 +113,21 @@ app uses. Before the first run:
 2. Make sure the `VenSure` database has the §16 settings rows from
    `data-model.sql`. The tests assume the seeded set is present.
 
-Tests modify rows in `try/finally` blocks and restore the original value.
-If a test crashes mid-flight, one setting value may be left modified —
-recover by re-running the §16 INSERT block from `data-model.sql` or fixing
-the affected key by hand. The current probe key is
-`AI.Polling.IntervalMinutes` (original value: `5`).
+Tests modify rows in `try/finally` blocks and restore the original state.
+If a test crashes mid-flight some cleanup may be needed:
+
+- **Settings tests** use one seeded row (`AI.Polling.IntervalMinutes`,
+  original value `5`) as a probe and restore its value in `finally`. If
+  this gets left modified, re-run the §16 INSERT from `data-model.sql`
+  or fix the key by hand.
+- **UserGroup tests** create fresh rows in both `dbo.user_groups` and
+  `dbo.users` with `_test_`-prefixed names and hard-delete them in
+  `finally`. Stray rows are harmless leftovers. Cleanup query if needed:
+  ```sql
+  DELETE FROM dbo.users       WHERE entraid LIKE '_test_%';
+  DELETE FROM dbo.user_groups WHERE name    LIKE '_test_%';
+  ```
+  Delete users first to avoid FK violations.
 
 ## Solution layout
 

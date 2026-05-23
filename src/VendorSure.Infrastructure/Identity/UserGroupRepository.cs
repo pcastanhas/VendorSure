@@ -51,6 +51,18 @@ internal sealed class UserGroupRepository : IUserGroupRepository
         return await connection.QuerySingleOrDefaultAsync<UserGroup>(command);
     }
 
+    public async Task<int> CountAssignedUsersAsync(int groupId, CancellationToken ct = default)
+    {
+        const string sql = @"
+            SELECT COUNT(*)
+            FROM dbo.users
+            WHERE group_id = @groupId;";
+
+        using var connection = await _connectionFactory.CreateOpenConnectionAsync(ct);
+        var command = new CommandDefinition(sql, new { groupId }, cancellationToken: ct);
+        return await connection.ExecuteScalarAsync<int>(command);
+    }
+
     public async Task<int> CreateAsync(UserGroup group, CancellationToken ct = default)
     {
         // INSERT then SELECT SCOPE_IDENTITY() in one round-trip. CAST to int
@@ -67,20 +79,46 @@ internal sealed class UserGroupRepository : IUserGroupRepository
         return await connection.QuerySingleAsync<int>(command);
     }
 
-    public async Task<bool> UpdateAsync(UserGroup group, CancellationToken ct = default)
+    public async Task<UpdateUserGroupResult> UpdateAsync(UserGroup group, CancellationToken ct = default)
     {
-        const string sql = @"
+        // The WHERE clause enforces the deactivation rule atomically:
+        //   - we always match by id, AND
+        //   - either we're not setting IsActive=false, OR the row is
+        //     already inactive (so this isn't a deactivation transition),
+        //     OR no users reference this group.
+        // Doing it in one statement closes the race window between a
+        // count check and the UPDATE.
+        const string updateSql = @"
             UPDATE dbo.user_groups
             SET name                  = @Name,
                 is_active             = @IsActive,
                 can_restart_workflow  = @CanRestartWorkflow,
                 can_change_workflow   = @CanChangeWorkflow,
                 can_submit_requests   = @CanSubmitRequests
-            WHERE id = @Id;";
+            WHERE id = @Id
+              AND (
+                    @IsActive = 1
+                 OR is_active = 0
+                 OR NOT EXISTS (SELECT 1 FROM dbo.users WHERE group_id = @Id)
+              );";
 
         using var connection = await _connectionFactory.CreateOpenConnectionAsync(ct);
-        var command = new CommandDefinition(sql, group, cancellationToken: ct);
-        var rowsAffected = await connection.ExecuteAsync(command);
-        return rowsAffected > 0;
+
+        var updateCommand = new CommandDefinition(updateSql, group, cancellationToken: ct);
+        var rowsAffected = await connection.ExecuteAsync(updateCommand);
+        if (rowsAffected > 0)
+        {
+            return UpdateUserGroupResult.Updated;
+        }
+
+        // 0 rows updated. Either the id doesn't exist, or the rule rejected
+        // the deactivation. Disambiguate with a single existence probe.
+        const string existsSql = "SELECT COUNT(*) FROM dbo.user_groups WHERE id = @Id;";
+        var existsCommand = new CommandDefinition(existsSql, new { group.Id }, cancellationToken: ct);
+        var rowExists = await connection.ExecuteScalarAsync<int>(existsCommand) > 0;
+
+        return rowExists
+            ? UpdateUserGroupResult.RejectedHasUsers
+            : UpdateUserGroupResult.NotFound;
     }
 }
