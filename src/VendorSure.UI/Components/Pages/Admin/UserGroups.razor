@@ -1,0 +1,242 @@
+@page "/admin/user-groups"
+@attribute [Authorize]
+
+@using Microsoft.AspNetCore.Authorization
+@using VendorSure.Domain.Identity
+@using VendorSure.Services.Identity
+
+@inject IUserGroupRepository GroupRepository
+@inject IDialogService DialogService
+@inject ISnackbar Snackbar
+@inject ILogger<UserGroups> Logger
+
+<PageTitle>User Groups — VendorSure</PageTitle>
+
+<MudStack Row="true" AlignItems="AlignItems.Center" Class="mb-4">
+    <MudStack Spacing="0">
+        <MudText Typo="Typo.h4">User Groups</MudText>
+        <MudText Typo="Typo.body2" Class="mud-text-secondary">
+            Groupings of users that share permission flags. Edit a row to
+            change its name, permissions, or active state.
+        </MudText>
+    </MudStack>
+    <MudSpacer />
+    <MudButton Variant="Variant.Filled"
+               Color="Color.Primary"
+               StartIcon="@Icons.Material.Filled.Add"
+               OnClick="OpenCreateDialog">
+        New group
+    </MudButton>
+</MudStack>
+
+<MudTable Items="@_items"
+          Dense="true"
+          Hover="true"
+          Loading="@_loading"
+          LoadingProgressColor="Color.Primary"
+          Elevation="1">
+    <HeaderContent>
+        <MudTh>Name</MudTh>
+        <MudTh Style="width: 110px; text-align: center;">Active</MudTh>
+        <MudTh Style="width: 130px; text-align: center;">Assigned users</MudTh>
+        <MudTh Style="width: 110px; text-align: center;">Restart</MudTh>
+        <MudTh Style="width: 110px; text-align: center;">Change WF</MudTh>
+        <MudTh Style="width: 110px; text-align: center;">Submit</MudTh>
+        <MudTh Style="width: 64px;"></MudTh>
+    </HeaderContent>
+    <RowTemplate>
+        <MudTd DataLabel="Name">
+            @if (!context.Group.IsActive)
+            {
+                <span class="mud-text-disabled">@context.Group.Name</span>
+                <MudChip T="string" Size="Size.Small" Color="Color.Default" Class="ml-2" Variant="Variant.Outlined">Inactive</MudChip>
+            }
+            else
+            {
+                @context.Group.Name
+            }
+        </MudTd>
+        <MudTd DataLabel="Active" Style="text-align: center;">
+            @if (context.Group.IsActive)
+            {
+                <MudIcon Icon="@Icons.Material.Filled.Check" Color="Color.Success" Size="Size.Small" />
+            }
+        </MudTd>
+        <MudTd DataLabel="Assigned users" Style="text-align: center;">
+            @context.AssignedUserCount
+        </MudTd>
+        <MudTd DataLabel="Restart" Style="text-align: center;">
+            @if (context.Group.CanRestartWorkflow)
+            {
+                <MudIcon Icon="@Icons.Material.Filled.Check" Color="Color.Success" Size="Size.Small" />
+            }
+        </MudTd>
+        <MudTd DataLabel="Change WF" Style="text-align: center;">
+            @if (context.Group.CanChangeWorkflow)
+            {
+                <MudIcon Icon="@Icons.Material.Filled.Check" Color="Color.Success" Size="Size.Small" />
+            }
+        </MudTd>
+        <MudTd DataLabel="Submit" Style="text-align: center;">
+            @if (context.Group.CanSubmitRequests)
+            {
+                <MudIcon Icon="@Icons.Material.Filled.Check" Color="Color.Success" Size="Size.Small" />
+            }
+        </MudTd>
+        <MudTd>
+            <MudIconButton Icon="@Icons.Material.Filled.Edit"
+                           Size="Size.Small"
+                           OnClick="@(() => OpenEditDialog(context))"
+                           aria-label="@($"Edit {context.Group.Name}")" />
+        </MudTd>
+    </RowTemplate>
+    <NoRecordsContent>
+        <MudText>No user groups yet. Click "New group" to create one.</MudText>
+    </NoRecordsContent>
+    <LoadingContent>
+        <MudText>Loading…</MudText>
+    </LoadingContent>
+</MudTable>
+
+@code {
+    private IReadOnlyList<UserGroupListItem> _items = Array.Empty<UserGroupListItem>();
+    private bool _loading = true;
+
+    protected override async Task OnInitializedAsync()
+    {
+        await LoadAsync();
+    }
+
+    private async Task LoadAsync()
+    {
+        _loading = true;
+        try
+        {
+            _items = await GroupRepository.ListWithUserCountsAsync();
+        }
+        catch (Exception ex)
+        {
+            Logger.LogError(ex, "Failed to load user groups.");
+            _items = Array.Empty<UserGroupListItem>();
+            Snackbar.Add("Failed to load user groups. Check the log for details.", Severity.Error);
+        }
+        finally
+        {
+            _loading = false;
+        }
+    }
+
+    private async Task OpenCreateDialog()
+    {
+        var blank = new UserGroup
+        {
+            Id = 0,
+            Name = string.Empty,
+            IsActive = true,
+            CanRestartWorkflow = false,
+            CanChangeWorkflow = false,
+            CanSubmitRequests = true,
+        };
+
+        var parameters = new DialogParameters<EditUserGroupDialog>
+        {
+            { x => x.Group, blank },
+            { x => x.AssignedUserCount, 0 },
+        };
+
+        await ShowDialogAndHandleAsync("New user group", parameters, isCreate: true);
+    }
+
+    private async Task OpenEditDialog(UserGroupListItem item)
+    {
+        var parameters = new DialogParameters<EditUserGroupDialog>
+        {
+            { x => x.Group, item.Group },
+            { x => x.AssignedUserCount, item.AssignedUserCount },
+        };
+
+        await ShowDialogAndHandleAsync($"Edit {item.Group.Name}", parameters, isCreate: false);
+    }
+
+    private async Task ShowDialogAndHandleAsync(
+        string title,
+        DialogParameters<EditUserGroupDialog> parameters,
+        bool isCreate)
+    {
+        var options = new DialogOptions
+        {
+            CloseOnEscapeKey = true,
+            MaxWidth = MaxWidth.Small,
+            FullWidth = true,
+        };
+
+        var dialog = await DialogService.ShowAsync<EditUserGroupDialog>(title, parameters, options);
+        var result = await dialog.Result;
+        if (result is null || result.Canceled) return;
+
+        if (result.Data is not UserGroup group)
+        {
+            Logger.LogWarning("Edit dialog returned unexpected data type {Type}.", result.Data?.GetType().Name ?? "null");
+            return;
+        }
+
+        if (isCreate) await SaveCreateAsync(group);
+        else await SaveUpdateAsync(group);
+    }
+
+    private async Task SaveCreateAsync(UserGroup group)
+    {
+        try
+        {
+            var newId = await GroupRepository.CreateAsync(group);
+            Logger.LogInformation("User group '{Name}' created (id={Id}) by admin UI.", group.Name, newId);
+            Snackbar.Add($"Created {group.Name}.", Severity.Success);
+            await LoadAsync();
+        }
+        catch (Exception ex)
+        {
+            Logger.LogError(ex, "Failed to create user group '{Name}'.", group.Name);
+            Snackbar.Add($"Failed to create {group.Name}: {ex.Message}", Severity.Error);
+        }
+    }
+
+    private async Task SaveUpdateAsync(UserGroup group)
+    {
+        try
+        {
+            var result = await GroupRepository.UpdateAsync(group);
+            switch (result)
+            {
+                case UpdateUserGroupResult.Updated:
+                    Logger.LogInformation("User group {Id} updated by admin UI.", group.Id);
+                    Snackbar.Add($"Saved {group.Name}.", Severity.Success);
+                    await LoadAsync();
+                    break;
+
+                case UpdateUserGroupResult.NotFound:
+                    Logger.LogWarning("UpdateAsync NotFound for user group id={Id}.", group.Id);
+                    Snackbar.Add($"Could not save {group.Name} — the group no longer exists.", Severity.Warning);
+                    await LoadAsync();
+                    break;
+
+                case UpdateUserGroupResult.RejectedHasUsers:
+                    // Race: the UI disables the IsActive toggle when count > 0,
+                    // but another admin could have assigned a user between when
+                    // this dialog opened and when Save was clicked.
+                    Logger.LogWarning(
+                        "UpdateAsync RejectedHasUsers for user group id={Id}: " +
+                        "deactivation blocked because users are assigned.", group.Id);
+                    Snackbar.Add(
+                        $"Cannot deactivate {group.Name}: users are still assigned to this group.",
+                        Severity.Error);
+                    await LoadAsync();
+                    break;
+            }
+        }
+        catch (Exception ex)
+        {
+            Logger.LogError(ex, "Failed to update user group id={Id}.", group.Id);
+            Snackbar.Add($"Failed to save {group.Name}: {ex.Message}", Severity.Error);
+        }
+    }
+}

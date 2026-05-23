@@ -1,0 +1,109 @@
+@using VendorSure.Domain.Identity
+
+<MudDialog>
+    <TitleContent>
+        <MudText Typo="Typo.h6">@TitleText</MudText>
+    </TitleContent>
+    <DialogContent>
+        <MudStack Spacing="3">
+            <MudTextField @bind-Value="_name"
+                          Label="Name"
+                          Variant="Variant.Outlined"
+                          Immediate="true"
+                          Error="@NameIsInvalid"
+                          ErrorText="Name is required."
+                          MaxLength="100" />
+
+            <MudSwitch T="bool"
+                       @bind-Value="_isActive"
+                       Color="Color.Success"
+                       Disabled="@CannotToggleActive">
+                Active
+            </MudSwitch>
+            @if (CannotToggleActive)
+            {
+                <MudText Typo="Typo.caption" Class="mud-text-secondary">
+                    Cannot be deactivated: @AssignedUserCount user@(AssignedUserCount == 1 ? "" : "s")
+                    currently assigned to this group. Reassign or deactivate
+                    those users first.
+                </MudText>
+            }
+
+            <MudDivider />
+
+            <MudText Typo="Typo.subtitle2">Permissions</MudText>
+            <MudSwitch T="bool" @bind-Value="_canRestartWorkflow" Color="Color.Primary">
+                Can restart workflow
+            </MudSwitch>
+            <MudSwitch T="bool" @bind-Value="_canChangeWorkflow" Color="Color.Primary">
+                Can change workflow
+            </MudSwitch>
+            <MudSwitch T="bool" @bind-Value="_canSubmitRequests" Color="Color.Primary">
+                Can submit requests
+            </MudSwitch>
+        </MudStack>
+    </DialogContent>
+    <DialogActions>
+        <MudButton OnClick="Cancel">Cancel</MudButton>
+        <MudButton Color="Color.Primary"
+                   Variant="Variant.Filled"
+                   OnClick="Save"
+                   Disabled="@NameIsInvalid">
+            Save
+        </MudButton>
+    </DialogActions>
+</MudDialog>
+
+@code {
+    [CascadingParameter] private IMudDialogInstance MudDialog { get; set; } = default!;
+
+    /// <summary>The group being edited. <c>Id == 0</c> means "create new".</summary>
+    [Parameter, EditorRequired] public UserGroup Group { get; set; } = default!;
+
+    /// <summary>How many users currently point at this group. Drives the
+    /// disabled state of the IsActive switch.</summary>
+    [Parameter] public int AssignedUserCount { get; set; }
+
+    private string _name = string.Empty;
+    private bool _isActive;
+    private bool _canRestartWorkflow;
+    private bool _canChangeWorkflow;
+    private bool _canSubmitRequests;
+
+    private bool IsCreate => Group.Id == 0;
+    private string TitleText => IsCreate ? "New user group" : $"Edit {Group.Name}";
+
+    private bool NameIsInvalid => string.IsNullOrWhiteSpace(_name);
+
+    // Deactivation is gated on assigned users — but only when this is an
+    // existing group AND the switch is currently on. A new group has no
+    // users yet so the switch is freely toggleable.
+    private bool CannotToggleActive => !IsCreate && _isActive && AssignedUserCount > 0;
+
+    protected override void OnInitialized()
+    {
+        _name = Group.Name;
+        _isActive = IsCreate ? true : Group.IsActive;
+        _canRestartWorkflow = Group.CanRestartWorkflow;
+        _canChangeWorkflow = Group.CanChangeWorkflow;
+        _canSubmitRequests = Group.CanSubmitRequests;
+    }
+
+    private void Cancel() => MudDialog.Cancel();
+
+    private void Save()
+    {
+        if (NameIsInvalid) return;
+
+        var result = new UserGroup
+        {
+            Id = Group.Id,
+            Name = _name.Trim(),
+            IsActive = _isActive,
+            CanRestartWorkflow = _canRestartWorkflow,
+            CanChangeWorkflow = _canChangeWorkflow,
+            CanSubmitRequests = _canSubmitRequests,
+        };
+        MudDialog.Close(DialogResult.Ok(result));
+    }
+}

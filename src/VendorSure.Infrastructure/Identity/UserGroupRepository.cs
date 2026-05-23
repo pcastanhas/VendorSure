@@ -33,6 +33,59 @@ internal sealed class UserGroupRepository : IUserGroupRepository
         return rows.ToList();
     }
 
+    public async Task<IReadOnlyList<UserGroupListItem>> ListWithUserCountsAsync(CancellationToken ct = default)
+    {
+        // LEFT JOIN against the COUNT subquery so groups with no users
+        // still appear with AssignedUserCount = 0. The COALESCE handles
+        // that NULL → 0.
+        const string sql = @"
+            SELECT
+                g.id                       AS Id,
+                g.name                     AS Name,
+                g.is_active                AS IsActive,
+                g.can_restart_workflow     AS CanRestartWorkflow,
+                g.can_change_workflow      AS CanChangeWorkflow,
+                g.can_submit_requests      AS CanSubmitRequests,
+                COALESCE(uc.UserCount, 0)  AS AssignedUserCount
+            FROM dbo.user_groups g
+            LEFT JOIN (
+                SELECT group_id, COUNT(*) AS UserCount
+                FROM dbo.users
+                GROUP BY group_id
+            ) uc ON uc.group_id = g.id
+            ORDER BY g.name;";
+
+        using var connection = await _connectionFactory.CreateOpenConnectionAsync(ct);
+        var command = new CommandDefinition(sql, cancellationToken: ct);
+        var rows = await connection.QueryAsync<GroupWithCountRow>(command);
+
+        return rows.Select(r => new UserGroupListItem(
+            new UserGroup
+            {
+                Id = r.Id,
+                Name = r.Name,
+                IsActive = r.IsActive,
+                CanRestartWorkflow = r.CanRestartWorkflow,
+                CanChangeWorkflow = r.CanChangeWorkflow,
+                CanSubmitRequests = r.CanSubmitRequests,
+            },
+            r.AssignedUserCount)).ToList();
+    }
+
+    // Flat shape Dapper materialises into, then we project to UserGroupListItem.
+    // Kept private to the repository — it's a one-off projection, not a
+    // domain concept.
+    private sealed class GroupWithCountRow
+    {
+        public int Id { get; init; }
+        public string Name { get; init; } = string.Empty;
+        public bool IsActive { get; init; }
+        public bool CanRestartWorkflow { get; init; }
+        public bool CanChangeWorkflow { get; init; }
+        public bool CanSubmitRequests { get; init; }
+        public int AssignedUserCount { get; init; }
+    }
+
     public async Task<UserGroup?> GetByIdAsync(int id, CancellationToken ct = default)
     {
         const string sql = @"

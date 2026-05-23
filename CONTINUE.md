@@ -4,12 +4,12 @@
 
 ## Where we are
 
-**Phase 2 in progress.** Chunks 1-2 done (UserGroup repository,
-User repository expanded to full CRUD). Next: Phase 2 / Chunk 3
-(User Groups admin page).
+**Phase 2 in progress.** Chunks 1-3 done (UserGroup repository,
+User repository expanded to full CRUD, User Groups admin page).
+Next: Phase 2 / Chunk 4 (Users admin page — last chunk of Phase 2).
 
 Read these to get oriented:
-- `docs/PLAN.md` — the phase/chunk roadmap. **Next step is Phase 2 / Chunk 3.**
+- `docs/PLAN.md` — the phase/chunk roadmap. **Next step is Phase 2 / Chunk 4.**
 - `docs/data-model.sql` — the reviewed schema.
 - `docs/CONCEPT.md` — design intent. §3.3 updated to reflect the Settings
   admin pattern; §3.1 and §3.2 are still stale for the original reasons
@@ -104,14 +104,16 @@ and `dotnet test`, reports back.
 
 ## Suggested next session
 
-**Phase 2 / Chunk 3 — User Groups admin page.**
+**Phase 2 / Chunk 4 — Users admin page.** Last chunk of Phase 2.
 
-Per `docs/PLAN.md` Phase 2 Chunk 3: `/admin/user-groups` route.
-MudTable list view with the four permission flag columns and an
-"assigned users" count column (powered by
-`IUserGroupRepository.CountAssignedUsersAsync`). New/edit dialog with
-text field for Name and four switches for the bit fields. The IsActive
-switch is disabled when the assigned-users count > 0. Same pattern as
-Phase 1's Settings page (list → edit dialog → snackbar → refresh).
+Per `docs/PLAN.md` Phase 2 Chunk 4: `/admin/users` route. MudTable
+listing all users with their group, admin flag, active flag. New/edit
+dialog with text fields for Entraid and Name, a group-picker dropdown
+(active groups only — `IUserGroupRepository.GetAllAsync` then filter),
+and switches for IsAdmin and IsActive. Maps the
+`CreateUserResult` / `UpdateUserResult` outcomes to distinct snackbar
+messages (entraid collision, inactive group, etc.).
+
+After this chunk, Phase 2 wraps with a docs rollup commit.
 
 PAT note: each session, user provides a short-lived PAT for the repo.

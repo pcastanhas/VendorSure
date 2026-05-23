@@ -25,6 +25,13 @@ public enum UpdateUserGroupResult
 }
 
 /// <summary>
+/// A group together with the count of users currently assigned to it.
+/// Used by the admin list page so we don't have to issue one
+/// CountAssignedUsersAsync call per row.
+/// </summary>
+public sealed record UserGroupListItem(UserGroup Group, int AssignedUserCount);
+
+/// <summary>
 /// CRUD operations on the <c>user_groups</c> table.
 /// </summary>
 /// <remarks>
@@ -39,6 +46,13 @@ public interface IUserGroupRepository
     /// admin UI decides whether to filter them.
     /// </summary>
     Task<IReadOnlyList<UserGroup>> GetAllAsync(CancellationToken ct = default);
+
+    /// <summary>
+    /// Returns all groups along with the count of users currently assigned
+    /// to each. One SQL round-trip; the admin list page uses this so it
+    /// doesn't N+1 itself with per-row count calls.
+    /// </summary>
+    Task<IReadOnlyList<UserGroupListItem>> ListWithUserCountsAsync(CancellationToken ct = default);
 
     /// <summary>
     /// Returns the group with the given id, or <c>null</c> if no row has

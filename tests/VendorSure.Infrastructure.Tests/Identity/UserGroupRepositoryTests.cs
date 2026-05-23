@@ -129,6 +129,54 @@ public sealed class UserGroupRepositoryTests : IClassFixture<InfrastructureTestF
     }
 
     [Fact]
+    public async Task ListWithUserCountsAsync_returns_zero_for_empty_group()
+    {
+        var group = NewTestGroup();
+        int newId = 0;
+        try
+        {
+            newId = await _repository.CreateAsync(group);
+
+            var list = await _repository.ListWithUserCountsAsync();
+            var item = list.SingleOrDefault(i => i.Group.Id == newId);
+            Assert.NotNull(item);
+            Assert.Equal(0, item!.AssignedUserCount);
+        }
+        finally
+        {
+            if (newId > 0) await DeleteGroupAsync(newId);
+        }
+    }
+
+    [Fact]
+    public async Task ListWithUserCountsAsync_includes_correct_count_for_group_with_users()
+    {
+        var group = NewTestGroup();
+        int newId = 0;
+        var userIds = new List<int>();
+        try
+        {
+            newId = await _repository.CreateAsync(group);
+            userIds.Add(await InsertTestUserAsync(newId, isActive: true));
+            userIds.Add(await InsertTestUserAsync(newId, isActive: true));
+            userIds.Add(await InsertTestUserAsync(newId, isActive: false));
+
+            var list = await _repository.ListWithUserCountsAsync();
+            var item = list.SingleOrDefault(i => i.Group.Id == newId);
+            Assert.NotNull(item);
+            Assert.Equal(3, item!.AssignedUserCount);
+            // Sanity check that the embedded UserGroup carries fields through.
+            Assert.Equal(group.Name, item.Group.Name);
+            Assert.True(item.Group.IsActive);
+        }
+        finally
+        {
+            foreach (var uid in userIds) await DeleteUserAsync(uid);
+            if (newId > 0) await DeleteGroupAsync(newId);
+        }
+    }
+
+    [Fact]
     public async Task CountAssignedUsersAsync_returns_zero_for_new_group()
     {
         var group = NewTestGroup();
