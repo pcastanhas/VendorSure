@@ -4,12 +4,12 @@
 
 ## Where we are
 
-**Phase 2 in progress.** Chunk 1 done (UserGroup repository + tests).
-Next: Phase 2 / Chunk 2 (expand the User repository from
-GetByEntraidAsync to full CRUD).
+**Phase 2 in progress.** Chunks 1-2 done (UserGroup repository,
+User repository expanded to full CRUD). Next: Phase 2 / Chunk 3
+(User Groups admin page).
 
 Read these to get oriented:
-- `docs/PLAN.md` — the phase/chunk roadmap. **Next step is Phase 2 / Chunk 2.**
+- `docs/PLAN.md` — the phase/chunk roadmap. **Next step is Phase 2 / Chunk 3.**
 - `docs/data-model.sql` — the reviewed schema.
 - `docs/CONCEPT.md` — design intent. §3.3 updated to reflect the Settings
   admin pattern; §3.1 and §3.2 are still stale for the original reasons
@@ -104,14 +104,14 @@ and `dotnet test`, reports back.
 
 ## Suggested next session
 
-**Phase 2 / Chunk 2 — Expand User repository to full CRUD.**
+**Phase 2 / Chunk 3 — User Groups admin page.**
 
-Per `docs/PLAN.md` Phase 2 Chunk 2: the User entity, IUserRepository,
-and the Dapper implementation all exist from Phase 1 / Chunk 4
-(`GetByEntraidAsync` for the debug identity shim). This chunk grows the
-interface and impl to match what `UserGroupRepository` has: list
-(`GetAllAsync`), get by id, create, update. Tests in
-`VendorSure.Infrastructure.Tests` following the `_test_`-prefix +
-hard-delete-in-finally pattern from `UserGroupRepositoryTests`.
+Per `docs/PLAN.md` Phase 2 Chunk 3: `/admin/user-groups` route.
+MudTable list view with the four permission flag columns and an
+"assigned users" count column (powered by
+`IUserGroupRepository.CountAssignedUsersAsync`). New/edit dialog with
+text field for Name and four switches for the bit fields. The IsActive
+switch is disabled when the assigned-users count > 0. Same pattern as
+Phase 1's Settings page (list → edit dialog → snackbar → refresh).
 
 PAT note: each session, user provides a short-lived PAT for the repo.
