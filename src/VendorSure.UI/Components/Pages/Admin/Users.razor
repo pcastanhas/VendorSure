@@ -1,0 +1,290 @@
+@page "/admin/users"
+@attribute [Authorize]
+
+@using Microsoft.AspNetCore.Authorization
+@using VendorSure.Domain.Identity
+@using VendorSure.Services.Identity
+
+@inject IUserRepository UserRepository
+@inject IUserGroupRepository GroupRepository
+@inject IDialogService DialogService
+@inject ISnackbar Snackbar
+@inject ILogger<Users> Logger
+
+<PageTitle>Users — VendorSure</PageTitle>
+
+<MudStack Row="true" AlignItems="AlignItems.Center" Class="mb-4">
+    <MudStack Spacing="0">
+        <MudText Typo="Typo.h4">Users</MudText>
+        <MudText Typo="Typo.body2" Class="mud-text-secondary">
+            VendorSure user accounts. Each user belongs to one group.
+        </MudText>
+    </MudStack>
+    <MudSpacer />
+    <MudButton Variant="Variant.Filled"
+               Color="Color.Primary"
+               StartIcon="@Icons.Material.Filled.Add"
+               OnClick="OpenCreateDialog"
+               Disabled="@(_activeGroups.Count == 0)">
+        New user
+    </MudButton>
+</MudStack>
+
+@if (_activeGroups.Count == 0 && !_loading)
+{
+    <MudAlert Severity="Severity.Warning" Class="mb-4">
+        No active user groups exist. Create one in
+        <MudLink Href="/admin/user-groups">User Groups</MudLink> before
+        creating users.
+    </MudAlert>
+}
+
+<MudTable Items="@_items"
+          Dense="true"
+          Hover="true"
+          Loading="@_loading"
+          LoadingProgressColor="Color.Primary"
+          Elevation="1">
+    <HeaderContent>
+        <MudTh>Name</MudTh>
+        <MudTh>Entra OID</MudTh>
+        <MudTh>Group</MudTh>
+        <MudTh Style="width: 90px; text-align: center;">Admin</MudTh>
+        <MudTh Style="width: 90px; text-align: center;">Active</MudTh>
+        <MudTh Style="width: 64px;"></MudTh>
+    </HeaderContent>
+    <RowTemplate>
+        <MudTd DataLabel="Name">
+            @if (!context.User.IsActive)
+            {
+                <span class="mud-text-disabled">@context.User.Name</span>
+                <MudChip T="string" Size="Size.Small" Color="Color.Default" Class="ml-2" Variant="Variant.Outlined">Inactive</MudChip>
+            }
+            else
+            {
+                @context.User.Name
+            }
+        </MudTd>
+        <MudTd DataLabel="Entra OID">
+            <code>@context.User.Entraid</code>
+        </MudTd>
+        <MudTd DataLabel="Group">@context.GroupName</MudTd>
+        <MudTd DataLabel="Admin" Style="text-align: center;">
+            @if (context.User.IsAdmin)
+            {
+                <MudIcon Icon="@Icons.Material.Filled.Star" Color="Color.Warning" Size="Size.Small" />
+            }
+        </MudTd>
+        <MudTd DataLabel="Active" Style="text-align: center;">
+            @if (context.User.IsActive)
+            {
+                <MudIcon Icon="@Icons.Material.Filled.Check" Color="Color.Success" Size="Size.Small" />
+            }
+        </MudTd>
+        <MudTd>
+            <MudIconButton Icon="@Icons.Material.Filled.Edit"
+                           Size="Size.Small"
+                           OnClick="@(() => OpenEditDialog(context))"
+                           aria-label="@($"Edit {context.User.Name}")" />
+        </MudTd>
+    </RowTemplate>
+    <NoRecordsContent>
+        <MudText>No users yet. Click "New user" to create one.</MudText>
+    </NoRecordsContent>
+    <LoadingContent>
+        <MudText>Loading…</MudText>
+    </LoadingContent>
+</MudTable>
+
+@code {
+    private IReadOnlyList<UserListItem> _items = Array.Empty<UserListItem>();
+    private IReadOnlyList<UserGroup> _activeGroups = Array.Empty<UserGroup>();
+    private bool _loading = true;
+
+    protected override async Task OnInitializedAsync()
+    {
+        await LoadAsync();
+    }
+
+    private async Task LoadAsync()
+    {
+        _loading = true;
+        try
+        {
+            // Two loads in parallel — independent reads, both feed the page.
+            var usersTask = UserRepository.ListWithGroupNamesAsync();
+            var groupsTask = GroupRepository.GetAllAsync();
+            await Task.WhenAll(usersTask, groupsTask);
+
+            _items = usersTask.Result;
+            _activeGroups = groupsTask.Result.Where(g => g.IsActive).ToList();
+        }
+        catch (Exception ex)
+        {
+            Logger.LogError(ex, "Failed to load users page.");
+            _items = Array.Empty<UserListItem>();
+            _activeGroups = Array.Empty<UserGroup>();
+            Snackbar.Add("Failed to load users. Check the log for details.", Severity.Error);
+        }
+        finally
+        {
+            _loading = false;
+        }
+    }
+
+    private async Task OpenCreateDialog()
+    {
+        if (_activeGroups.Count == 0)
+        {
+            Snackbar.Add("Create an active user group before creating users.", Severity.Warning);
+            return;
+        }
+
+        var blank = new User
+        {
+            Id = 0,
+            Entraid = string.Empty,
+            Name = string.Empty,
+            GroupId = 0,
+            IsAdmin = false,
+            IsActive = true,
+        };
+
+        var parameters = new DialogParameters<EditUserDialog>
+        {
+            { x => x.User, blank },
+            { x => x.ActiveGroups, _activeGroups },
+        };
+
+        await ShowDialogAndHandleAsync("New user", parameters, isCreate: true);
+    }
+
+    private async Task OpenEditDialog(UserListItem item)
+    {
+        var parameters = new DialogParameters<EditUserDialog>
+        {
+            { x => x.User, item.User },
+            { x => x.ActiveGroups, _activeGroups },
+        };
+
+        await ShowDialogAndHandleAsync($"Edit {item.User.Name}", parameters, isCreate: false);
+    }
+
+    private async Task ShowDialogAndHandleAsync(
+        string title,
+        DialogParameters<EditUserDialog> parameters,
+        bool isCreate)
+    {
+        var options = new DialogOptions
+        {
+            CloseOnEscapeKey = true,
+            MaxWidth = MaxWidth.Small,
+            FullWidth = true,
+        };
+
+        var dialog = await DialogService.ShowAsync<EditUserDialog>(title, parameters, options);
+        var result = await dialog.Result;
+        if (result is null || result.Canceled) return;
+
+        if (result.Data is not User user)
+        {
+            Logger.LogWarning(
+                "User edit dialog returned unexpected data type {Type}.",
+                result.Data?.GetType().Name ?? "null");
+            return;
+        }
+
+        if (isCreate) await SaveCreateAsync(user);
+        else await SaveUpdateAsync(user);
+    }
+
+    private async Task SaveCreateAsync(User user)
+    {
+        try
+        {
+            var result = await UserRepository.CreateAsync(user);
+            switch (result.Outcome)
+            {
+                case CreateUserOutcome.Created:
+                    Logger.LogInformation(
+                        "User '{Name}' created (id={Id}, entraid={Entraid}) by admin UI.",
+                        user.Name, result.Id, user.Entraid);
+                    Snackbar.Add($"Created {user.Name}.", Severity.Success);
+                    await LoadAsync();
+                    break;
+
+                case CreateUserOutcome.RejectedEntraidConflict:
+                    Logger.LogWarning(
+                        "Create rejected: entraid '{Entraid}' already in use.", user.Entraid);
+                    Snackbar.Add(
+                        $"Cannot create {user.Name}: another user already has Entra OID {user.Entraid}.",
+                        Severity.Error);
+                    break;
+
+                case CreateUserOutcome.RejectedInactiveGroup:
+                    // The dropdown filters to active groups, so this only fires
+                    // if the selected group was deactivated between page load
+                    // and Save click.
+                    Logger.LogWarning(
+                        "Create rejected: group id={GroupId} is inactive.", user.GroupId);
+                    Snackbar.Add(
+                        $"Cannot create {user.Name}: the selected group is no longer active.",
+                        Severity.Error);
+                    await LoadAsync();
+                    break;
+            }
+        }
+        catch (Exception ex)
+        {
+            Logger.LogError(ex, "Failed to create user '{Name}'.", user.Name);
+            Snackbar.Add($"Failed to create {user.Name}: {ex.Message}", Severity.Error);
+        }
+    }
+
+    private async Task SaveUpdateAsync(User user)
+    {
+        try
+        {
+            var result = await UserRepository.UpdateAsync(user);
+            switch (result)
+            {
+                case UpdateUserResult.Updated:
+                    Logger.LogInformation("User {Id} updated by admin UI.", user.Id);
+                    Snackbar.Add($"Saved {user.Name}.", Severity.Success);
+                    await LoadAsync();
+                    break;
+
+                case UpdateUserResult.NotFound:
+                    Logger.LogWarning("UpdateAsync NotFound for user id={Id}.", user.Id);
+                    Snackbar.Add(
+                        $"Could not save {user.Name} — the user no longer exists.",
+                        Severity.Warning);
+                    await LoadAsync();
+                    break;
+
+                case UpdateUserResult.RejectedEntraidConflict:
+                    Logger.LogWarning(
+                        "Update rejected: entraid '{Entraid}' collides with another user.",
+                        user.Entraid);
+                    Snackbar.Add(
+                        $"Cannot save {user.Name}: another user already has Entra OID {user.Entraid}.",
+                        Severity.Error);
+                    break;
+
+                case UpdateUserResult.RejectedInactiveGroup:
+                    Logger.LogWarning(
+                        "Update rejected: group id={GroupId} is inactive.", user.GroupId);
+                    Snackbar.Add(
+                        $"Cannot save {user.Name}: the selected group is no longer active.",
+                        Severity.Error);
+                    await LoadAsync();
+                    break;
+            }
+        }
+        catch (Exception ex)
+        {
+            Logger.LogError(ex, "Failed to update user id={Id}.", user.Id);
+            Snackbar.Add($"Failed to save {user.Name}: {ex.Message}", Severity.Error);
+        }
+    }
+}

@@ -42,6 +42,12 @@ public enum UpdateUserResult
 }
 
 /// <summary>
+/// A user together with the name of the group they belong to. Used by the
+/// admin list page to avoid an N+1 of per-row group lookups.
+/// </summary>
+public sealed record UserListItem(User User, string GroupName);
+
+/// <summary>
 /// CRUD operations on the <c>users</c> table.
 /// </summary>
 /// <remarks>
@@ -59,6 +65,12 @@ public interface IUserRepository
     /// admin UI decides whether to filter them.
     /// </summary>
     Task<IReadOnlyList<User>> GetAllAsync(CancellationToken ct = default);
+
+    /// <summary>
+    /// Returns all users along with the name of the group they belong to.
+    /// One SQL round-trip via JOIN — used by the admin list page.
+    /// </summary>
+    Task<IReadOnlyList<UserListItem>> ListWithGroupNamesAsync(CancellationToken ct = default);
 
     /// <summary>
     /// Returns the user with the given id, or <c>null</c> if no row has

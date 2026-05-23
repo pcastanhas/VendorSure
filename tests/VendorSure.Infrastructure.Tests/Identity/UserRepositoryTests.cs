@@ -118,6 +118,30 @@ public sealed class UserRepositoryTests : IClassFixture<InfrastructureTestFixtur
     }
 
     [Fact]
+    public async Task ListWithGroupNamesAsync_returns_users_with_their_group_names()
+    {
+        var groupId = await CreateActiveTestGroupAsync();
+        var groupName = (await _groups.GetByIdAsync(groupId))!.Name;
+        var user = NewTestUser(groupId);
+        int newId = 0;
+        try
+        {
+            newId = (await _users.CreateAsync(user)).Id!.Value;
+
+            var list = await _users.ListWithGroupNamesAsync();
+            var item = list.SingleOrDefault(i => i.User.Id == newId);
+            Assert.NotNull(item);
+            Assert.Equal(user.Name, item!.User.Name);
+            Assert.Equal(groupName, item.GroupName);
+        }
+        finally
+        {
+            if (newId > 0) await DeleteUserAsync(newId);
+            await DeleteGroupAsync(groupId);
+        }
+    }
+
+    [Fact]
     public async Task GetByIdAsync_returns_null_for_unknown_id()
     {
         var result = await _users.GetByIdAsync(int.MaxValue - 1);

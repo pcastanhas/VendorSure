@@ -4,18 +4,20 @@
 
 ## Where we are
 
-**Phase 2 in progress.** Chunks 1-3 done (UserGroup repository,
-User repository expanded to full CRUD, User Groups admin page).
-Next: Phase 2 / Chunk 4 (Users admin page — last chunk of Phase 2).
+**Phase 2 complete.** All 4 chunks done (UserGroup repository, User
+repository expanded to full CRUD, User Groups admin page, Users admin
+page). Next: Phase 2 docs rollup, then Phase 3 (Required Documents
+Library).
 
 Read these to get oriented:
-- `docs/PLAN.md` — the phase/chunk roadmap. **Next step is Phase 2 / Chunk 4.**
+- `docs/PLAN.md` — the phase/chunk roadmap. **Next step is the Phase 2
+  docs-rollup commit, then Phase 3 / Chunk 1.**
 - `docs/data-model.sql` — the reviewed schema.
-- `docs/CONCEPT.md` — design intent. §3.3 updated to reflect the Settings
-  admin pattern; §3.1 and §3.2 are still stale for the original reasons
-  (refreshed in Phase 6 / Phase 9).
+- `docs/CONCEPT.md` — design intent. §3.3 reflects the Settings admin
+  pattern (Phase 2 admin pages follow the same shape); §3.1 and §3.2
+  are still scheduled for refresh in Phase 6 / Phase 9.
 - `BUILD.md` — how to build/run locally. Includes a "What's currently
-  built (Phase 1)" summary.
+  built (Phase 1)" summary that needs a Phase 2 addition in the rollup.
 - `LessonsLearned.md` — running log of gotchas. Five entries so far.
 - `docs/REMOVE-BEFORE-PROD.md` — debug identity shim cutover checklist.
 
@@ -104,16 +106,13 @@ and `dotnet test`, reports back.
 
 ## Suggested next session
 
-**Phase 2 / Chunk 4 — Users admin page.** Last chunk of Phase 2.
+**Phase 2 docs rollup, then Phase 3 / Chunk 1 (RequiredDocuments
+repository).**
 
-Per `docs/PLAN.md` Phase 2 Chunk 4: `/admin/users` route. MudTable
-listing all users with their group, admin flag, active flag. New/edit
-dialog with text fields for Entraid and Name, a group-picker dropdown
-(active groups only — `IUserGroupRepository.GetAllAsync` then filter),
-and switches for IsAdmin and IsActive. Maps the
-`CreateUserResult` / `UpdateUserResult` outcomes to distinct snackbar
-messages (entraid collision, inactive group, etc.).
-
-After this chunk, Phase 2 wraps with a docs rollup commit.
+Per the locked-in approach rules: at the end of every phase, one
+commit covering `BUILD.md`, `CONCEPT.md` (if affected),
+`LessonsLearned.md`, `PLAN.md`, and `CONTINUE.md`. Phase 3 begins with
+the RequiredDocumentsLibrary repository (Phase 3 / Chunk 1 in
+PLAN.md).
 
 PAT note: each session, user provides a short-lived PAT for the repo.

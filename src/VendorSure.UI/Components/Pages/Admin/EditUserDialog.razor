@@ -1,0 +1,121 @@
+@using VendorSure.Domain.Identity
+
+<MudDialog>
+    <TitleContent>
+        <MudText Typo="Typo.h6">@TitleText</MudText>
+    </TitleContent>
+    <DialogContent>
+        <MudStack Spacing="3">
+            <MudTextField @bind-Value="_name"
+                          Label="Name"
+                          Variant="Variant.Outlined"
+                          Immediate="true"
+                          Error="@NameIsInvalid"
+                          ErrorText="Name is required."
+                          MaxLength="100" />
+
+            <MudTextField @bind-Value="_entraid"
+                          Label="Entra OID"
+                          HelperText="The user's Azure AD object ID. Typically a GUID."
+                          Variant="Variant.Outlined"
+                          Immediate="true"
+                          Error="@EntraidIsInvalid"
+                          ErrorText="Entra OID is required."
+                          MaxLength="100"
+                          Style="font-family: monospace;" />
+
+            <MudSelect T="int"
+                       @bind-Value="_groupId"
+                       Label="Group"
+                       Variant="Variant.Outlined"
+                       Error="@GroupIsInvalid"
+                       ErrorText="A group must be selected.">
+                @foreach (var g in ActiveGroups)
+                {
+                    <MudSelectItem T="int" Value="@g.Id">@g.Name</MudSelectItem>
+                }
+            </MudSelect>
+
+            <MudDivider />
+
+            <MudSwitch T="bool" @bind-Value="_isAdmin" Color="Color.Primary">
+                Admin
+            </MudSwitch>
+            <MudText Typo="Typo.caption" Class="mud-text-secondary mt-n2">
+                Admins can access the admin pages (Users, Groups, Settings, etc.).
+            </MudText>
+
+            <MudSwitch T="bool" @bind-Value="_isActive" Color="Color.Success">
+                Active
+            </MudSwitch>
+            <MudText Typo="Typo.caption" Class="mud-text-secondary mt-n2">
+                Inactive users cannot sign in but their record is retained
+                for audit history.
+            </MudText>
+        </MudStack>
+    </DialogContent>
+    <DialogActions>
+        <MudButton OnClick="Cancel">Cancel</MudButton>
+        <MudButton Color="Color.Primary"
+                   Variant="Variant.Filled"
+                   OnClick="Save"
+                   Disabled="@HasValidationErrors">
+            Save
+        </MudButton>
+    </DialogActions>
+</MudDialog>
+
+@code {
+    [CascadingParameter] private IMudDialogInstance MudDialog { get; set; } = default!;
+
+    /// <summary>The user being edited. <c>Id == 0</c> means "create new".</summary>
+    [Parameter, EditorRequired] public User User { get; set; } = default!;
+
+    /// <summary>Groups available for assignment. Filtered to active groups
+    /// by the caller; users can only be assigned to active groups per the
+    /// repository rule.</summary>
+    [Parameter, EditorRequired] public IReadOnlyList<UserGroup> ActiveGroups { get; set; } = Array.Empty<UserGroup>();
+
+    private string _name = string.Empty;
+    private string _entraid = string.Empty;
+    private int _groupId;
+    private bool _isAdmin;
+    private bool _isActive;
+
+    private bool IsCreate => User.Id == 0;
+    private string TitleText => IsCreate ? "New user" : $"Edit {User.Name}";
+
+    private bool NameIsInvalid => string.IsNullOrWhiteSpace(_name);
+    private bool EntraidIsInvalid => string.IsNullOrWhiteSpace(_entraid);
+    private bool GroupIsInvalid => _groupId <= 0;
+    private bool HasValidationErrors => NameIsInvalid || EntraidIsInvalid || GroupIsInvalid;
+
+    protected override void OnInitialized()
+    {
+        _name = User.Name;
+        _entraid = User.Entraid;
+        _groupId = IsCreate
+            ? (ActiveGroups.Count > 0 ? ActiveGroups[0].Id : 0)
+            : User.GroupId;
+        _isAdmin = User.IsAdmin;
+        _isActive = IsCreate ? true : User.IsActive;
+    }
+
+    private void Cancel() => MudDialog.Cancel();
+
+    private void Save()
+    {
+        if (HasValidationErrors) return;
+
+        var result = new User
+        {
+            Id = User.Id,
+            Entraid = _entraid.Trim(),
+            Name = _name.Trim(),
+            GroupId = _groupId,
+            IsAdmin = _isAdmin,
+            IsActive = _isActive,
+        };
+        MudDialog.Close(DialogResult.Ok(result));
+    }
+}

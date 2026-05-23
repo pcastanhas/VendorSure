@@ -32,6 +32,54 @@ internal sealed class UserRepository : IUserRepository
         return rows.ToList();
     }
 
+    public async Task<IReadOnlyList<UserListItem>> ListWithGroupNamesAsync(CancellationToken ct = default)
+    {
+        // INNER JOIN — every user has a group (FK NOT NULL), so no need for
+        // LEFT JOIN or COALESCE. The group_id column on users is also
+        // queryable from the embedded User entity.
+        const string sql = @"
+            SELECT
+                u.id          AS Id,
+                u.entraid     AS Entraid,
+                u.name        AS Name,
+                u.group_id    AS GroupId,
+                u.is_admin    AS IsAdmin,
+                u.is_active   AS IsActive,
+                g.name        AS GroupName
+            FROM dbo.users u
+            INNER JOIN dbo.user_groups g ON g.id = u.group_id
+            ORDER BY u.name;";
+
+        using var connection = await _connectionFactory.CreateOpenConnectionAsync(ct);
+        var command = new CommandDefinition(sql, cancellationToken: ct);
+        var rows = await connection.QueryAsync<UserWithGroupNameRow>(command);
+
+        return rows.Select(r => new UserListItem(
+            new User
+            {
+                Id = r.Id,
+                Entraid = r.Entraid,
+                Name = r.Name,
+                GroupId = r.GroupId,
+                IsAdmin = r.IsAdmin,
+                IsActive = r.IsActive,
+            },
+            r.GroupName)).ToList();
+    }
+
+    // Flat shape Dapper materialises into, projected to UserListItem.
+    // Kept private — one-off projection, not a domain concept.
+    private sealed class UserWithGroupNameRow
+    {
+        public int Id { get; init; }
+        public string Entraid { get; init; } = string.Empty;
+        public string Name { get; init; } = string.Empty;
+        public int GroupId { get; init; }
+        public bool IsAdmin { get; init; }
+        public bool IsActive { get; init; }
+        public string GroupName { get; init; } = string.Empty;
+    }
+
     public async Task<User?> GetByIdAsync(int id, CancellationToken ct = default)
     {
         var sql = $"SELECT {SelectColumns} FROM dbo.users WHERE id = @id;";
