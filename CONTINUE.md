@@ -17,25 +17,29 @@ We are working in three phases, in order:
 - The five subsystems: Submission Portal, AI Triage Layer (Claude), Admin Panel, Workflow Engine, Reviewer Surface.
 - Two stateless Claude calls in triage: prevalidation, then workflow selection.
 - Request Types are versioned and immutable once placed in service. In-flight requests run on their original version forever.
+- Request Type lifecycle states: **Draft → In Service → Superseded**.
 - The workflow engine is a dumb synchronous graph walker — it doesn't know what nodes do.
-- Blocks (process + decision) are IT-authored code, composed visually by Compliance. Decisions are strictly binary. Three implied execution modes: System / AI / User.
+- Blocks (process + decision) are IT-authored code, composed visually by Compliance. Decisions are strictly binary. **No first-class System / AI / User distinction** — one block interface; the implementation decides how it works.
+- A block that declares an input artifact type receives **all** available artifacts of that type; the block decides internally how to use them.
 - Artifacts are typed, produced by process blocks, consumed downstream. Documents are at the request level and survive restarts.
 - Designer is a dumb canvas — no validation, no graph walking.
 - Reviewer surface uses role-based pool queues. Submitters have no in-app visibility; they get emails.
-- Restart is the only mid-flight intervention: admin-only, goes to start node, wipes artifacts, retains docs, preserves original instance for audit.
+- "Stalled" is a presentation concept for the reviewer surface: alarm-fired ∨ last-process-failed ∨ untouched-for-N-days. N is TBD.
+- **Restart is in-place** on the same workflow instance. Resets pointer to the workflow's start node, wipes artifacts, resets alarms, retains documents and submitter notes. Does **not** create a new instance and does **not** change which workflow the instance runs.
+- **Workflow reassignment** is a separate mechanism. The current instance is cancelled (moves to Cancelled terminal); a new workflow is attached to the request and a new instance is started on it. This is how AI routing mistakes get corrected.
+- Block catalog mechanics and block-code versioning are **out of scope** — blocks are authored outside the app; IT dev policy tracks versions.
 
 ## What is explicitly deferred
 
-See section 7 of `docs/CONCEPT.md` for the full open-items list. Headline items:
+See §7 of `docs/CONCEPT.md` for the full list. Headline items remaining:
 
-- Block catalog mechanics and block-code versioning.
-- Detailed artifact lifecycle (multiple of the same type, etc.).
-- Three execution modes expressed in interfaces.
-- "Stalled" definition.
+- Document and artifact storage / identity details.
+- Stalled threshold N (days).
+- Restart and workflow-reassignment mechanics (who, when).
+- Decision-note requirements.
 - Submitter email triggers.
-- Full admin function list.
-- Request Type lifecycle states and transitions.
-- Restart audit linkage in the reviewer view.
+- Other admin-panel functions beyond Request Types.
+- Request Type lifecycle transition rules.
 
 ## Approach rules (from the user)
 

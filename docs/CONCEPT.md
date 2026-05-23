@@ -99,6 +99,14 @@ This is structural and worth stating plainly:
 - **Snapshot semantics:** a request that started under v1 finishes under v1, even after v2 is placed in service. Each running request is bound to its Request Type version for life.
 - Multiple in-service or recently-in-service versions of the same Request Type can coexist at any moment. The latest is what new requests use; older versions are kept alive as long as any live request still references them.
 
+#### Lifecycle states
+
+A Request Type version moves through three states:
+
+- **Draft** — editable. No live requests are bound to it. Anything about it can change.
+- **In Service** — immutable. New requests bind to this version. Exactly one version of a given Request Type is In Service at a time.
+- **Superseded** — a newer version of the same Request Type is now In Service. No new requests bind to a Superseded version, but in-flight requests already bound to it finish on it. A Superseded version is retained as long as any request still references it.
+
 ### 3.4 Workflow Engine
 
 The orchestrator. Walks workflow instances from start to terminal.
@@ -127,6 +135,16 @@ The orchestrator. Walks workflow instances from start to terminal.
 - Side-effect only — they produce emails (e.g., reminders to the assigned reviewer). They do not change workflow state.
 - Especially useful on user-decision nodes where waits are unbounded.
 
+#### Stalled
+
+The engine has no internal "stuck" state (see *Failure model* above). "Stalled" is a presentation concept used by the reviewer surface to populate the Stalled Workflows queue, defined as the union of:
+
+- An alarm has fired on the current node, **or**
+- The last process block on this instance failed, **or**
+- The instance has been untouched for more than N days (N TBD in design).
+
+Being Stalled changes nothing about the workflow's execution; it only changes which queue surfaces it to reviewers.
+
 #### Cancellation
 
 - Cancellation is **a user-decision outcome**, not a separate mechanism. Wherever a workflow is parked for a human decision, "Cancel" can be one of the available outcomes.
@@ -135,11 +153,21 @@ The orchestrator. Walks workflow instances from start to terminal.
 
 #### Restart
 
-- The only mid-flight intervention.
-- Admin-initiated.
-- Goes back to the **start node** of either the same workflow or a different workflow (this is how routing mistakes by the AI are corrected).
+- A mid-flight intervention on a workflow instance.
+- **In-place on the same workflow instance.** Restart does **not** create a new instance, and it does **not** change which workflow the instance is bound to. The shape of the workflow is preserved; the pointer just moves.
+- The current node pointer is reset to the start node of the workflow the instance is already running.
 - All artifacts are deleted. All alarms reset. Documents and submitter notes are retained.
-- The original workflow instance is preserved on the request for audit; the restart creates a new workflow instance on the same request.
+- The instance's audit log retains everything that happened pre-restart. The restart itself is recorded as another event on the timeline.
+- Mechanics (who can trigger it, when it's allowed) deferred to the design phase.
+
+#### Workflow reassignment
+
+A separate mechanism from Restart. Used when the wrong workflow is running for the request (e.g., to correct an AI routing mistake from the triage layer).
+
+- The current workflow instance is moved to its **Cancelled** terminal node.
+- A new workflow is attached to the request and a new workflow instance is started on it from the start node.
+- Over its lifetime, a request can carry multiple workflow instances — at most one live at a time, plus any number of terminal ones (Approved / Rejected / Cancelled). Each instance is bound to a single workflow for its entire life.
+- Mechanics (who can trigger it, audit linkage between the cancelled and the new instance) deferred to the design phase.
 
 ### 3.5 Reviewer Surface
 
@@ -181,15 +209,15 @@ The shapes that recur across the subsystems. These are concept-level, not the da
 - **Block** — IT-authored code, registered into a catalog, composed visually in the designer. Two kinds:
   - **Process block** (rectangle): declares required input artifact types, produces a typed output artifact on success.
   - **Decision block** (diamond): declares required input artifact types, returns one of exactly two outgoing paths (`Path1` or `Path2`), each with a label. **Decisions are strictly binary.** N-way classification is achieved by an upstream AI process emitting typed classification artifacts (e.g., `ForeignDesignation`, `RiskProfile`, `PublicOrPrivateCompany`) and then routing via a chain of binary decisions.
-  - Three execution modes implied across both block kinds: **System** (deterministic code), **AI** (a Claude call), **User** (a human decision in the reviewer surface).
-- **Artifact** — a typed object produced by a process block, consumed by downstream blocks. Lives in the workflow instance's artifact bag. Blocks request artifacts of the types they need; the workflow returns them; blocks process them as they see fit.
+  - How a block does its work — deterministic system code, a Claude call, parking for a human decision in the reviewer surface — is internal to the block's IT-authored implementation. The engine and the designer see only the block interface.
+- **Artifact** — a typed object produced by a process block, consumed by downstream blocks. A block that declares a required input artifact type receives **all** available artifacts of that type from the workflow instance's artifact bag; the block's own logic decides how to use them.
 - **Document** — uploaded by the submitter. Lives at the **request** level, not the workflow-instance level. Survives restarts.
 
 ## 5. Audit & Immutability Posture
 
 - **Capture generously.** Every Claude call's inputs, outputs, prompt version, and model version is persisted. Every block produces a log pass-or-fail. Every user decision records who, when, what they saw, and what they chose. Every override of an AI decision is captured.
 - **Freeze the past.** Request Type versions are immutable once placed in service. In-flight requests run on their original version forever. Old versions are preserved as long as any request still references them.
-- **Preserve history through change.** Restarting a request preserves the original workflow instance on the request; the restart adds a new workflow instance alongside it.
+- **Preserve history through change.** A restart preserves the pre-restart history on the same workflow instance; the restart is just another event on the instance's audit log. When a request is moved to a different workflow via workflow reassignment, the cancelled instance and the new instance both remain on the request.
 - **Mineable corpus.** Persisted AI calls + decisions + overrides form a training corpus for future prompt refinement and analysis.
 
 ## 6. Cross-cutting Implementation Decisions Deferred
@@ -204,16 +232,20 @@ Settled at concept level; details deferred to the design phase.
 
 ## 7. Open Items
 
-Explicitly deferred during the concept session, to be resolved in design:
+What remains genuinely open at the concept level. Everything else is either resolved above or is an implementation detail deferred to the design phase (in which case it lives in §6 or in a per-subsystem deferral below).
 
-- **Block catalog mechanics.** How IT-authored blocks register into the catalog and surface in the designer's palette.
-- **Block code versioning.** Whether in-flight workflows pin to a specific block-code version or pick up the latest. (This is the most consequential open versioning question.)
-- **Artifact lifecycle in detail.** Multiple artifacts of the same type in one workflow (e.g., two OFAC payloads for two principals) — selection semantics for consuming blocks.
-- **Document vs. artifact boundary.** Confirmed at concept level (documents at the request, artifacts at the workflow instance, restart wipes artifacts but keeps documents). Storage and identity details deferred.
-- **Three block execution modes.** System / AI / User — to be expressed in the block base interface and the engine's wake protocol.
-- **"Stalled" definition.** Likely the union of alarm-fired, last-process-failed, and untouched-for-N-days. Exact rule TBD.
+- **Document and artifact storage and identity.** The boundary is settled (documents at the request, artifacts at the workflow instance, restart wipes artifacts but keeps documents). Storage technology and identity details deferred to design.
+- **Stalled threshold.** The rule is settled (alarm-fired ∨ last-process-failed ∨ untouched-for-N-days). The value of N is TBD.
+- **Restart mechanics.** Who can trigger it, when it's allowed.
+- **Workflow reassignment mechanics.** Who can trigger it, when it's allowed, how the cancelled and the new instance link in the audit view.
 - **Decision notes.** Whether reviewer notes on a user decision are always optional or sometimes required (e.g., on Reject).
 - **Submitter email triggers.** Exact list of events that emit an email to the submitter.
 - **Admin panel — other admin functions.** Beyond Request Types, the admin panel will likely need Users & Roles, Prompt management (IT-side), and Audit / Activity viewers. Full list TBD.
-- **Request Type lifecycle states.** Implied: Draft (editable) → In Service (immutable, accepting new requests) → Deprecated (no new requests, in-flight only) → Retired (no live requests). Transition rules TBD.
-- **Restart audit linkage.** How prior workflow instances are linked to the request after a restart, and how they surface in the reviewer view.
+- **Request Type lifecycle transitions.** The three states are settled (Draft → In Service → Superseded). The transition rules — what triggers each move, what's allowed in each state — TBD.
+
+The following were explicitly closed during the concept phase and are recorded here so we don't relitigate them:
+
+- **Block catalog and block-code versioning** — out of scope for VendorSure. Blocks are authored outside the app; the catalog uses whatever block code is registered at runtime. IT development policy tracks block versions externally.
+- **Multiple artifacts of the same type** — not the engine's concern. A block that requires an input artifact type receives all available artifacts of that type and decides internally how to use them.
+- **Block execution modes (System / AI / User)** — not a first-class distinction. There is one block interface; how a block does its work is internal to its IT-authored implementation.
+- **Restart audit linkage** — non-issue. Restart is in-place on the same workflow instance; the pre-restart history lives on the same instance's audit log.
