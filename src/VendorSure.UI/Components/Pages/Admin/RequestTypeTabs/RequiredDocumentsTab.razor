@@ -1,0 +1,328 @@
+@*
+    Required Documents tab for the Request Type detail page.
+
+    When the displayed version is Draft, this shows the full document-type
+    library as a table: each row has the doc's Name + File type hint, an
+    "Attached" checkbox, and a "Required" switch (disabled until attached).
+    Toggling Attached calls the junction repo's Add/Remove; toggling
+    Required calls SetRequired.
+
+    When the displayed version isn't Draft, only the currently-attached
+    docs are shown, all controls disabled — a read-only audit view of
+    what was attached when the version was placed in service.
+
+    Parameters are driven by the parent (RequestTypeDetail). Changing the
+    selected version triggers OnParametersSetAsync, which reloads.
+*@
+
+@using VendorSure.Domain.Documents
+@using VendorSure.Domain.RequestTypes
+@using VendorSure.Services.Documents
+@using VendorSure.Services.RequestTypes
+
+@inject IDocumentTypeRepository DocTypeRepository
+@inject IRequestTypeRequiredDocumentRepository JunctionRepository
+@inject ISnackbar Snackbar
+@inject ILogger<RequiredDocumentsTab> Logger
+
+@if (_loading)
+{
+    <MudProgressLinear Indeterminate="true" Color="Color.Primary" Class="my-2" />
+}
+else if (!IsDraft && _attached.Count == 0)
+{
+    <MudAlert Severity="Severity.Info" Variant="Variant.Text">
+        No required documents were attached when this version was created.
+    </MudAlert>
+}
+else if (IsDraft && _library.Count == 0)
+{
+    <MudAlert Severity="Severity.Warning" Variant="Variant.Text">
+        The document library is empty. Create document types in
+        <MudLink Href="/admin/required-documents">Required Documents</MudLink>
+        before attaching them here.
+    </MudAlert>
+}
+else
+{
+    @if (!IsDraft)
+    {
+        <MudText Typo="Typo.body2" Class="mud-text-secondary mb-2">
+            Read-only — this version's required documents are frozen.
+        </MudText>
+    }
+
+    <MudTable Items="@_rows"
+              Dense="true"
+              Hover="true"
+              Elevation="0">
+        <HeaderContent>
+            <MudTh>Document type</MudTh>
+            <MudTh Style="width: 140px;">File type</MudTh>
+            <MudTh Style="width: 120px; text-align: center;">Attached</MudTh>
+            <MudTh Style="width: 120px; text-align: center;">Required</MudTh>
+        </HeaderContent>
+        <RowTemplate>
+            <MudTd DataLabel="Document type">@context.LibraryName</MudTd>
+            <MudTd DataLabel="File type">
+                @if (!string.IsNullOrEmpty(context.FileTypeRequired))
+                {
+                    <code>@context.FileTypeRequired</code>
+                }
+                else
+                {
+                    <span class="mud-text-disabled">—</span>
+                }
+            </MudTd>
+            <MudTd DataLabel="Attached" Style="text-align: center;">
+                <MudCheckBox T="bool"
+                             Value="@context.IsAttached"
+                             ValueChanged="@((bool newValue) => ToggleAttachedAsync(context, newValue))"
+                             Disabled="@(!IsDraft || _busy)"
+                             Color="Color.Primary" />
+            </MudTd>
+            <MudTd DataLabel="Required" Style="text-align: center;">
+                <MudSwitch T="bool"
+                           Value="@context.IsRequired"
+                           ValueChanged="@((bool newValue) => SetRequiredAsync(context, newValue))"
+                           Disabled="@(!IsDraft || !context.IsAttached || _busy)"
+                           Color="Color.Success" />
+            </MudTd>
+        </RowTemplate>
+    </MudTable>
+}
+
+@code {
+    /// <summary>The Request Type version this tab is displaying.</summary>
+    [Parameter, EditorRequired] public int VersionId { get; set; }
+
+    /// <summary>
+    /// True when the version is editable. Drives the disabled state of the
+    /// table's checkboxes and switches; when false, the table also filters
+    /// down to attached rows only.
+    /// </summary>
+    [Parameter, EditorRequired] public bool IsDraft { get; set; }
+
+    /// <summary>
+    /// Row shape rendered by the table. Combines the library entry's
+    /// display fields with the attachment state for the current version.
+    /// </summary>
+    private sealed class Row
+    {
+        public required int LibraryId { get; init; }
+        public required string LibraryName { get; init; }
+        public string? FileTypeRequired { get; init; }
+        public int? JunctionId { get; set; }   // null when not attached
+        public bool IsRequired { get; set; }
+        public bool IsAttached => JunctionId.HasValue;
+    }
+
+    private IReadOnlyList<DocumentType> _library = Array.Empty<DocumentType>();
+    private IReadOnlyList<RequestTypeRequiredDocumentListItem> _attached =
+        Array.Empty<RequestTypeRequiredDocumentListItem>();
+    private List<Row> _rows = new();
+
+    private bool _loading = true;
+    private bool _busy;  // one mutation at a time; disables all controls
+
+    // Track the version id we've loaded for so we don't reload on every
+    // parameter-set when only IsDraft toggled (unlikely but cheap to guard).
+    private int _loadedForVersionId = -1;
+
+    protected override async Task OnParametersSetAsync()
+    {
+        if (VersionId == _loadedForVersionId) return;
+        _loadedForVersionId = VersionId;
+        await LoadAsync();
+    }
+
+    private async Task LoadAsync()
+    {
+        _loading = true;
+        try
+        {
+            // For non-Draft versions we only need the attached set —
+            // skip the (potentially large) library fetch.
+            var attachedTask = JunctionRepository.ListByVersionIdAsync(VersionId);
+            var libraryTask = IsDraft
+                ? DocTypeRepository.GetAllAsync()
+                : Task.FromResult<IReadOnlyList<DocumentType>>(Array.Empty<DocumentType>());
+
+            await Task.WhenAll(attachedTask, libraryTask);
+            _attached = attachedTask.Result;
+            _library = libraryTask.Result;
+
+            BuildRows();
+        }
+        catch (Exception ex)
+        {
+            Logger.LogError(ex, "Failed to load Required Documents tab for version id={VersionId}.", VersionId);
+            Snackbar.Add("Failed to load required documents. Check the log.", Severity.Error);
+            _attached = Array.Empty<RequestTypeRequiredDocumentListItem>();
+            _library = Array.Empty<DocumentType>();
+            _rows = new();
+        }
+        finally
+        {
+            _loading = false;
+        }
+    }
+
+    private void BuildRows()
+    {
+        var byLibraryId = _attached.ToDictionary(a => a.RequiredDocumentLibraryId);
+
+        if (IsDraft)
+        {
+            // Draft: full library, with attached rows pre-checked. Sort by
+            // library name for stable rendering.
+            _rows = _library
+                .OrderBy(l => l.Name, StringComparer.Ordinal)
+                .Select(l => new Row
+                {
+                    LibraryId = l.Id,
+                    LibraryName = l.Name,
+                    FileTypeRequired = l.FileTypeRequired,
+                    JunctionId = byLibraryId.TryGetValue(l.Id, out var j) ? j.Id : null,
+                    IsRequired = byLibraryId.TryGetValue(l.Id, out var j2) && j2.Required,
+                })
+                .ToList();
+        }
+        else
+        {
+            // Non-Draft: only show what's attached.
+            _rows = _attached
+                .OrderBy(a => a.LibraryName, StringComparer.Ordinal)
+                .Select(a => new Row
+                {
+                    LibraryId = a.RequiredDocumentLibraryId,
+                    LibraryName = a.LibraryName,
+                    FileTypeRequired = a.FileTypeRequired,
+                    JunctionId = a.Id,
+                    IsRequired = a.Required,
+                })
+                .ToList();
+        }
+    }
+
+    private async Task ToggleAttachedAsync(Row row, bool wantAttached)
+    {
+        if (_busy || !IsDraft) return;
+        _busy = true;
+
+        try
+        {
+            if (wantAttached && !row.IsAttached)
+            {
+                var result = await JunctionRepository.AddAsync(VersionId, row.LibraryId, required: true);
+                switch (result.Outcome)
+                {
+                    case AddRequiredDocumentOutcome.Added:
+                        Logger.LogInformation(
+                            "Attached library id={LibraryId} to version id={VersionId} (junction id={JunctionId}).",
+                            row.LibraryId, VersionId, result.Id);
+                        Snackbar.Add($"Attached {row.LibraryName}.", Severity.Success);
+                        break;
+                    case AddRequiredDocumentOutcome.RejectedDuplicate:
+                        // Another tab/admin already attached it. Just reload to sync.
+                        Snackbar.Add($"{row.LibraryName} was already attached.", Severity.Info);
+                        break;
+                    case AddRequiredDocumentOutcome.RejectedNotDraft:
+                        Snackbar.Add(
+                            "Cannot attach: this version is no longer Draft.",
+                            Severity.Error);
+                        break;
+                    case AddRequiredDocumentOutcome.RejectedVersionNotFound:
+                        Snackbar.Add(
+                            "Cannot attach: the version no longer exists.",
+                            Severity.Error);
+                        break;
+                    case AddRequiredDocumentOutcome.RejectedDocumentNotFound:
+                        Snackbar.Add(
+                            $"Cannot attach: {row.LibraryName} no longer exists.",
+                            Severity.Error);
+                        break;
+                }
+            }
+            else if (!wantAttached && row.IsAttached)
+            {
+                var junctionId = row.JunctionId!.Value;
+                var result = await JunctionRepository.RemoveAsync(junctionId);
+                switch (result)
+                {
+                    case MutateRequiredDocumentResult.Succeeded:
+                        Logger.LogInformation(
+                            "Detached library id={LibraryId} from version id={VersionId} (junction id={JunctionId}).",
+                            row.LibraryId, VersionId, junctionId);
+                        Snackbar.Add($"Detached {row.LibraryName}.", Severity.Success);
+                        break;
+                    case MutateRequiredDocumentResult.NotFound:
+                        // Already gone — sync state.
+                        Snackbar.Add($"{row.LibraryName} was already detached.", Severity.Info);
+                        break;
+                    case MutateRequiredDocumentResult.RejectedNotDraft:
+                        Snackbar.Add(
+                            "Cannot detach: this version is no longer Draft.",
+                            Severity.Error);
+                        break;
+                }
+            }
+
+            await LoadAsync();
+        }
+        catch (Exception ex)
+        {
+            Logger.LogError(ex, "Failed to toggle Attached on library id={LibraryId} for version id={VersionId}.",
+                row.LibraryId, VersionId);
+            Snackbar.Add($"Failed: {ex.Message}", Severity.Error);
+        }
+        finally
+        {
+            _busy = false;
+        }
+    }
+
+    private async Task SetRequiredAsync(Row row, bool newRequired)
+    {
+        if (_busy || !IsDraft || !row.IsAttached) return;
+        _busy = true;
+
+        try
+        {
+            var result = await JunctionRepository.SetRequiredAsync(row.JunctionId!.Value, newRequired);
+            switch (result)
+            {
+                case MutateRequiredDocumentResult.Succeeded:
+                    Logger.LogInformation(
+                        "Set required={NewRequired} on junction id={JunctionId} (library {LibraryName}).",
+                        newRequired, row.JunctionId, row.LibraryName);
+                    Snackbar.Add(
+                        $"{row.LibraryName}: {(newRequired ? "required" : "optional")}.",
+                        Severity.Success);
+                    break;
+                case MutateRequiredDocumentResult.NotFound:
+                    Snackbar.Add(
+                        $"{row.LibraryName} no longer attached — reloading.",
+                        Severity.Warning);
+                    break;
+                case MutateRequiredDocumentResult.RejectedNotDraft:
+                    Snackbar.Add(
+                        "Cannot change: this version is no longer Draft.",
+                        Severity.Error);
+                    break;
+            }
+
+            await LoadAsync();
+        }
+        catch (Exception ex)
+        {
+            Logger.LogError(ex, "Failed to set required on junction id={JunctionId}.",
+                row.JunctionId);
+            Snackbar.Add($"Failed: {ex.Message}", Severity.Error);
+        }
+        finally
+        {
+            _busy = false;
+        }
+    }
+}

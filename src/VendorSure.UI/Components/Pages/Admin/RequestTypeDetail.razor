@@ -4,6 +4,7 @@
 @using Microsoft.AspNetCore.Authorization
 @using VendorSure.Domain.RequestTypes
 @using VendorSure.Services.RequestTypes
+@using VendorSure.UI.Components.Pages.Admin.RequestTypeTabs
 
 @inject IRequestTypeRepository TypeRepository
 @inject IRequestTypeVersionRepository VersionRepository
@@ -135,9 +136,17 @@ else
                 </MudAlert>
             </MudTabPanel>
             <MudTabPanel Text="Required Documents" Icon="@Icons.Material.Filled.Description">
-                <MudAlert Severity="Severity.Info" Variant="Variant.Text">
-                    Required-documents picker ships in Phase 4 / Chunk 6.
-                </MudAlert>
+                @if (_selectedVersion is not null)
+                {
+                    <RequiredDocumentsTab VersionId="@_selectedVersion.Id"
+                                          IsDraft="@(_selectedVersion.RequestState == RequestState.Draft)" />
+                }
+                else
+                {
+                    <MudAlert Severity="Severity.Info" Variant="Variant.Text">
+                        Select a version to view its required documents.
+                    </MudAlert>
+                }
             </MudTabPanel>
             <MudTabPanel Text="Validations" Icon="@Icons.Material.Filled.RuleFolder">
                 <MudAlert Severity="Severity.Info" Variant="Variant.Text">
