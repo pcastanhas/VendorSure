@@ -244,7 +244,12 @@ GO
    ============================================================================ */
 
 /*  required_documents_library
-    Catalog of document *types* (W-9, voided check, etc.). */
+    Catalog of document *types* (W-9, voided check, etc.).
+
+    file_type_required is a display hint shown to the submitter ("expected:
+    PDF") but is NOT enforced — file-content checks happen in the AI
+    validations, not in client-side file-extension matching. The hint can
+    be NULL when no specific type is conventional. */
 CREATE TABLE [dbo].[required_documents_library] (
     [id]                    int             IDENTITY(1,1) NOT NULL,
     [name]                  nvarchar(100)   NOT NULL,
@@ -405,14 +410,14 @@ GO
     draft's FK already pointed at request_type_versions; only the column
     name was misleading.
 
-    request_status: high-level lifecycle, distinct from the workflow_state
-    of the live workflow instance:
-        N = New (just submitted, pre-triage)
-        T = In Triage
-        F = Fix-and-resubmit (parked, waiting on submitter)
-        W = In Workflow
-        A = Approved (terminal)
-        X = Rejected (terminal) — by triage or by workflow
+    request_status: high-level lifecycle. Distinct from the workflow_state
+    of any live workflow instance.
+        P = Pre-validation (row exists, validations either running or
+            completed-with-failures; submitter is in control). Validation
+            run state is observable from ai_usage, not stored here.
+        W = In Workflow (all validations passed; workflow engine owns it)
+        A = Approved  (terminal)
+        X = Rejected  (terminal — by validation refusal or by workflow)
         C = Cancelled (terminal) */
 CREATE TABLE [dbo].[requests] (
     [id]                        int             IDENTITY(1,1) NOT NULL,
@@ -423,7 +428,7 @@ CREATE TABLE [dbo].[requests] (
     [request_notes]             nvarchar(2000)  NULL,
     CONSTRAINT [PK_requests] PRIMARY KEY CLUSTERED ([id] ASC),
     CONSTRAINT [CK_requests_status]
-        CHECK ([request_status] IN ('N','T','F','W','A','X','C'))
+        CHECK ([request_status] IN ('P','W','A','X','C'))
 );
 GO
 

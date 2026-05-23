@@ -4,68 +4,91 @@
 
 ## Where we are
 
-**Phase 1 — Document.** The high-level concept has been agreed and captured in `docs/CONCEPT.md`. No code yet. No design doc yet.
+**End of Design phase. Start of Build phase (Phase 1).** Schema is committed
+at `docs/data-model.sql`. Build plan is committed at `docs/PLAN.md`.
+No code yet.
 
-We are working in three phases, in order:
+Read these to get oriented:
+- `docs/PLAN.md` — the phase/chunk roadmap. **Next step is Phase 1 / Chunk 1.**
+- `docs/data-model.sql` — the reviewed schema.
+- `docs/CONCEPT.md` — design intent (§3.1 and §3.2 are stale; refreshed in
+  Phase 6 / Phase 9).
+- `BUILD.md` — how to build/run locally (skeleton; grows with the app).
+- `LessonsLearned.md` — running log of gotchas (empty so far).
+- `docs/REMOVE-BEFORE-PROD.md` — cutover checklist (skeleton).
 
-1. **Document** ← we are here (and substantially done with the first pass)
-2. **Design** — detailed technical design on top of the concept.
-3. **Build** — implementation.
+## Approach rules (locked in during design)
 
-## What is settled (see `docs/CONCEPT.md` for full detail)
+- One commit per chunk. Push directly to `main`, no PRs.
+- Chunks are small enough that each leaves the app runnable and adds one
+  testable thing.
+- No throwaway scaffolding. If a UI surface is needed before the real UI is
+  ready, use a temporary test button against the real repository — never a
+  mock that gets thrown away.
+- Tests live with the chunk that produces the code being tested (where
+  there's something meaningful to assert).
+- Doc updates at the end of every phase: one commit covering `BUILD.md`,
+  `CONTINUE.md`, `CONCEPT.md` (if affected), `LessonsLearned.md`, and
+  `PLAN.md`.
 
-- The five subsystems: Submission Portal, AI Triage Layer (Claude), Admin Panel, Workflow Engine, Reviewer Surface.
-- Two stateless Claude calls in triage: prevalidation, then workflow selection.
-- Request Types are versioned and immutable once placed in service. In-flight requests run on their original version forever.
-- Request Type lifecycle states: **Draft → In Service → Superseded**.
-- The workflow engine is a dumb synchronous graph walker — it doesn't know what nodes do.
-- Blocks (process + decision) are IT-authored code, composed visually by Compliance. Decisions are strictly binary. **No first-class System / AI / User distinction** — one block interface; the implementation decides how it works.
-- A block that declares an input artifact type receives **all** available artifacts of that type; the block decides internally how to use them.
-- Artifacts are typed, produced by process blocks, consumed downstream. Documents are at the request level and survive restarts.
-- Designer is a dumb canvas — no validation, no graph walking.
-- Reviewer surface uses role-based pool queues. Submitters have no in-app visibility; they get emails.
-- "Stalled" is a presentation concept for the reviewer surface: alarm-fired ∨ last-process-failed ∨ untouched-for-N-days. N is TBD.
-- **Restart is in-place** on the same workflow instance. Resets pointer to the workflow's start node, wipes artifacts, resets alarms, retains documents and submitter notes. Does **not** create a new instance and does **not** change which workflow the instance runs.
-- **Workflow reassignment** is a separate mechanism. The current instance is cancelled (moves to Cancelled terminal); a new workflow is attached to the request and a new instance is started on it. This is how AI routing mistakes get corrected.
-- Block catalog mechanics and block-code versioning are **out of scope** — blocks are authored outside the app; IT dev policy tracks versions.
+## Stack (locked in during design)
 
-## What is explicitly deferred
+- **.NET 10**, Blazor Server, MudBlazor.
+- **Dapper** + raw T-SQL. No EF. No migration runner — schema is hand-applied
+  from `docs/data-model.sql` against the dev SQL Server.
+- **SQL Server** (dev DB, name `VenSure`).
+- **Serilog** with file sink, daily rolling, 30-day retention.
+- **xUnit** for tests.
+- **MailKit/MimeKit** for SMTP (when we get to email).
+- **Official Anthropic SDK** for Claude calls.
+- **No Docker** for dev. **No CI** — sync and build locally.
+- **No `.NET Aspire`.**
 
-See §7 of `docs/CONCEPT.md` for the full list. Headline items remaining:
+## Solution structure (locked in during design)
 
-- Document and artifact storage / identity details.
-- Stalled threshold N (days).
-- Restart and workflow-reassignment mechanics (who, when).
-- Decision-note requirements.
-- Submitter email triggers.
-- Other admin-panel functions beyond Request Types.
-- Request Type lifecycle transition rules.
+```
+src/
+├── VendorSure.Domain/             ← entities, enums, value objects, exceptions
+├── VendorSure.Services/           ← orchestration, AI service interface, repos
+│                                     defined as interfaces
+├── VendorSure.Infrastructure/     ← EF-free data access (Dapper), storage,
+│                                     MailKit, Claude client
+├── VendorSure.BackgroundWorkers/  ← Windows Service: workflow engine + budget
+│                                     polling worker
+└── VendorSure.UI/                 ← Blazor Server host, MudBlazor, SignalR
+tests/
+└── one project per src/ project
+```
 
-## Approach rules (from the user)
+Dependency direction: `UI` and `BackgroundWorkers` → `Services` →
+`Infrastructure` → `Domain`. `Domain` references nothing.
 
-- Do **not** write code or documents before agreement. The user will say when.
-- Commit and push **directly to `main`**. No PRs.
-- At the start of each session the user will provide a short-lived fine-grained PAT scoped to the repo. Clone if not already local, read files at the root.
-
-## Sandbox / tooling notes
+## Sandbox / tooling notes (carried forward from earlier session)
 
 ### .NET 10 SDK install (Ubuntu Noble)
 
-The SDK is published in Ubuntu Noble's main archive — no Microsoft repo needed. Both `archive.ubuntu.com` and `security.ubuntu.com` are in the egress allowlist.
+The SDK is published in Ubuntu Noble's main archive — no Microsoft repo
+needed. Both `archive.ubuntu.com` and `security.ubuntu.com` are in the
+egress allowlist.
 
 ```
 apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y dotnet-sdk-10.0
 ```
 
-`sudo` may or may not be needed depending on whether the session starts as root. In this sandbox it does not — running as root.
+`sudo` may or may not be needed depending on whether the session starts as
+root. In this sandbox it does not — running as root.
 
 Installs to `/usr/lib/dotnet/sdk` with the CLI symlinked at `/usr/bin/dotnet`.
 
-The first `apt-get install` after a fresh sandbox can fail with 404s on slightly-stale URLs because of patch bumps between the cached index and the live mirror — `apt-get update` first, then retry.
+The first `apt-get install` after a fresh sandbox can fail with 404s on
+slightly-stale URLs because of patch bumps between the cached index and the
+live mirror — `apt-get update` first, then retry.
 
-### Important limitation: NuGet is blocked
+### Important limitation: NuGet is blocked in the sandbox
 
-`api.nuget.org` is **not** in the egress allowlist. Consequence: `dotnet restore` and everything downstream (`build`, `publish`, `test`, `run`) cannot fetch packages from the sandbox.
+`api.nuget.org` is **not** in the egress allowlist. Consequence: `dotnet
+restore` and everything downstream (`build`, `publish`, `test`, `run`) cannot
+fetch packages from the sandbox.
 
 The SDK is still useful in-sandbox for:
 
@@ -73,20 +96,16 @@ The SDK is still useful in-sandbox for:
 - Template generation (`dotnet new ...`).
 - CLI-shape checks (project file structure, etc.).
 
-**Build verification has to happen on CI**, not in the sandbox.
-
-## Repo state at end of this session
-
-- `README.md` — repo intro.
-- `docs/CONCEPT.md` — the agreed concept.
-- `CONTINUE.md` — this file.
-- No code, no solution, no project files.
+**Build verification has to happen on the user's local machine**, not in the
+sandbox. Workflow: I write and commit code; user pulls, runs `dotnet build`
+and `dotnet test`, reports back.
 
 ## Suggested next session
 
-The user will choose, but the natural next move is one of:
+**Phase 1 / Chunk 1 — Solution scaffold + MudBlazor empty shell.**
 
-- **Design phase kickoff** — start producing a technical design doc (data model, component boundaries, API shapes, persistence choices, deployment shape) on top of the concept. Likely lands at `docs/DESIGN.md` and probably grows into multiple docs (e.g., per-subsystem).
-- **Fill in open items first** — pick from the deferred list in `docs/CONCEPT.md` §7 and resolve them at concept level before moving to design.
+See `docs/PLAN.md` Phase 1 for the chunk description. Deliverable: empty
+Blazor Server app boots, serves a MudBlazor shell, logs to file, reports DB
+reachability. Five src + five test projects with correct references.
 
-Either way: do not write code or design docs without the user's go-ahead.
+PAT note: each session, user provides a short-lived PAT for the repo.

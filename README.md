@@ -4,19 +4,24 @@ VendorSure is an internal pre-MRI vendor verification system for a large real es
 
 ## Status
 
-Concept phase. No code yet. The design is being captured before any implementation begins.
+Design substantially complete. Build starting (Phase 1).
 
 ## Documents
 
-- **[docs/CONCEPT.md](docs/CONCEPT.md)** — High-level concept and design of the system.
-- **[CONTINUE.md](CONTINUE.md)** — Session handoff notes. Read this first when picking the project back up.
+- **[docs/CONCEPT.md](docs/CONCEPT.md)** — High-level concept and design of the system. Some sections (§3.1, §3.2) are stale and will be refreshed during Phase 6 and Phase 9.
+- **[docs/data-model.sql](docs/data-model.sql)** — The reviewed schema definition. Source of truth for what's in the DB.
+- **[docs/PLAN.md](docs/PLAN.md)** — Build plan: phases and chunks, in order. Living doc.
+- **[BUILD.md](BUILD.md)** — How to build, run, test locally. Grows with the app.
+- **[LessonsLearned.md](LessonsLearned.md)** — Things we figured out the hard way.
+- **[docs/REMOVE-BEFORE-PROD.md](docs/REMOVE-BEFORE-PROD.md)** — Items that must be removed before any production deployment.
+- **[CONTINUE.md](CONTINUE.md)** — Session handoff. Read first when picking the project back up.
 
 ## Approach
 
-We are working in three phases, in order:
+Three phases in order:
 
-1. **Document** — capture the concept and design as living docs in this repo.
-2. **Design** — produce a detailed technical design (data model, APIs, component boundaries, etc.) on top of the concept.
-3. **Build** — implement.
+1. **Document** — capture the concept. ✓ done.
+2. **Design** — detailed technical design. ✓ substantially done (data model and decisions in `docs/`).
+3. **Build** — implement per `docs/PLAN.md`. ← we are here.
 
-We are currently in phase 1.
+Build runs chunk by chunk. One commit per chunk. After each phase, a docs commit.
