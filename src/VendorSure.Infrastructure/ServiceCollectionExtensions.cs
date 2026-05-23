@@ -26,6 +26,7 @@ public static class ServiceCollectionExtensions
         services.AddHostedService<DatabaseReachabilityCheck>();
 
         services.AddScoped<IUserRepository, UserRepository>();
+        services.AddScoped<IUserGroupRepository, UserGroupRepository>();
         services.AddScoped<ISettingsRepository, SettingsRepository>();
 
         return services;

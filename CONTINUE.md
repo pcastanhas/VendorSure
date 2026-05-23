@@ -4,14 +4,12 @@
 
 ## Where we are
 
-**Phase 1 complete.** All 7 chunks done (solution scaffold + MudBlazor,
-Serilog file logging, DB connection factory, debug identity shim, Settings
-repository with tests, Settings list page, Settings edit dialog), plus
-the post-Chunk-7 render-mode-cascade fix. Next: Phase 2 / Chunk 1
-(UserGroup repository).
+**Phase 2 in progress.** Chunk 1 done (UserGroup repository + tests).
+Next: Phase 2 / Chunk 2 (expand the User repository from
+GetByEntraidAsync to full CRUD).
 
 Read these to get oriented:
-- `docs/PLAN.md` — the phase/chunk roadmap. **Next step is Phase 2 / Chunk 1.**
+- `docs/PLAN.md` — the phase/chunk roadmap. **Next step is Phase 2 / Chunk 2.**
 - `docs/data-model.sql` — the reviewed schema.
 - `docs/CONCEPT.md` — design intent. §3.3 updated to reflect the Settings
   admin pattern; §3.1 and §3.2 are still stale for the original reasons
@@ -106,18 +104,14 @@ and `dotnet test`, reports back.
 
 ## Suggested next session
 
-**Phase 2 / Chunk 1 — UserGroup repository.**
+**Phase 2 / Chunk 2 — Expand User repository to full CRUD.**
 
-Per `docs/PLAN.md` Phase 2 Chunk 1: Dapper-based repository for the
-`user_groups` table. Domain entity in `VendorSure.Domain.Identity` (sits
-next to `User.cs`), interface in `VendorSure.Services.Identity`, impl
-in `VendorSure.Infrastructure.Identity`. CRUD: list, get by id, create,
-update, deactivate. Tests in `VendorSure.Infrastructure.Tests`
-following the `SettingsRepositoryTests` pattern (probe an existing
-seeded row, restore in `finally`).
-
-The User repository was partially built in Phase 1 / Chunk 4
-(`GetByEntraidAsync` for the debug shim). Phase 2 / Chunk 2 grows it
-with the rest of the CRUD surface.
+Per `docs/PLAN.md` Phase 2 Chunk 2: the User entity, IUserRepository,
+and the Dapper implementation all exist from Phase 1 / Chunk 4
+(`GetByEntraidAsync` for the debug identity shim). This chunk grows the
+interface and impl to match what `UserGroupRepository` has: list
+(`GetAllAsync`), get by id, create, update. Tests in
+`VendorSure.Infrastructure.Tests` following the `_test_`-prefix +
+hard-delete-in-finally pattern from `UserGroupRepositoryTests`.
 
 PAT note: each session, user provides a short-lived PAT for the repo.
