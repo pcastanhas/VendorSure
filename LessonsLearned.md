@@ -81,3 +81,42 @@ what's committed or pending.** The summary describes intent; git
 describes reality. When they disagree, git wins. This is cheap to do
 and prevents the worst failure mode (rewriting code that was already
 shipped, then forcing a merge or — worse — overwriting good commits).
+
+## 2026-05-23 — Blazor Web App interactive render mode must cascade
+
+In Chunk 7 the Settings list page had `@rendermode InteractiveServer`
+at the top, the pencil-edit button had an `OnClick` handler, and the
+button did nothing when clicked. No errors, no log entries, no
+exceptions — the page felt frozen. The SignalR circuit was being
+negotiated (visible in the request log: `/_blazor/negotiate` followed
+by `CONNECT /_blazor`) but click events were never reaching the
+server.
+
+The trap: in .NET 8+ Blazor Web Apps, **`@rendermode` declared on a
+page only makes that single component interactive — the layout
+chain above it (MainLayout, App, etc.) stays statically rendered**.
+MudBlazor's services (DialogService, Snackbar, KeyInterceptor,
+PopoverService) are provided by `MudDialogProvider`,
+`MudSnackbarProvider`, etc., which sit inside MainLayout. When the
+layout is static-rendered, those providers can't run interactively
+either. The page below them ends up half-rendered: the markup is
+present, but the JS plumbing that wires up event dispatch to MudBlazor
+components is dead. Pencil button → click → silence.
+
+Fix: move `@rendermode="InteractiveServer"` up to the routing
+infrastructure in `App.razor`, where it cascades through the entire
+component tree:
+
+```razor
+<HeadOutlet @rendermode="InteractiveServer" />
+<Routes @rendermode="InteractiveServer" />
+```
+
+With that change every page, layout, and provider in the app is
+interactive — no per-page `@rendermode` needed, no surprise dead
+zones. The per-page directives can be removed (they're redundant; in
+some configurations they conflict).
+
+For VendorSure this is fine: the entire app is admin-tooling for 5
+power users with no public surface, so there's nothing to gain from
+mixing static and interactive rendering. Set it once, everywhere, done.
