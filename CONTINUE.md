@@ -4,14 +4,15 @@
 
 ## Where we are
 
-**Phase 4 in progress.** Chunks 1-2 done (RequestType + RequestTypeVersion
-repositories with the immutability rule and `CreateWithFirstDraftAsync`;
-RequestTypeRequiredDocuments junction repository with parent-Draft
-guard on all mutations). Next: Phase 4 / Chunk 3 (RequestTypeValidations
-and ValidationDocuments repositories).
+**Phase 4 in progress.** Chunks 1-3 done (RequestType +
+RequestTypeVersion repositories with immutability rule;
+RequestTypeRequiredDocuments junction repository; RequestTypeValidations
++ ValidationDocuments repositories with same-version invariant on the
+validation-doc junction and transactional delete). Next: Phase 4 /
+Chunk 4 (Request Types list page).
 
 Read these to get oriented:
-- `docs/PLAN.md` — the phase/chunk roadmap. **Next step is Phase 4 / Chunk 3.**
+- `docs/PLAN.md` — the phase/chunk roadmap. **Next step is Phase 4 / Chunk 4.**
 - `docs/data-model.sql` — the reviewed schema.
 - `docs/CONCEPT.md` — design intent. §3.3 covers Settings, User Groups,
   Users, Required Documents admin pages; §3.1 and §3.2 still scheduled
@@ -107,12 +108,12 @@ and `dotnet test`, reports back.
 
 ## Suggested next session
 
-**Phase 4 / Chunk 3 — RequestTypeValidations + ValidationDocuments
-repositories.**
+**Phase 4 / Chunk 4 — Request Types list page.**
 
-Per `docs/PLAN.md` Phase 4 Chunk 3: CRUD for `request_type_validations`
-(the per-validation prompt + execution order) and the
-`request_type_validation_documents` junction (which library docs each
-validation looks at). Same Draft-only mutation pattern as Chunks 1-2.
+Per `docs/PLAN.md` Phase 4 Chunk 4: `/admin/request-types` route. Table
+of types with their current in-service version (and Draft, if any).
+This needs a list projection on `IRequestTypeRepository` joining to
+the versions table — the first "list with two interesting joined
+fields" since Phase 2. Same `*ListItem` projection pattern.
 
 PAT note: each session, user provides a short-lived PAT for the repo.

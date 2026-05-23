@@ -35,6 +35,8 @@ public static class ServiceCollectionExtensions
         services.AddScoped<IRequestTypeRepository, RequestTypeRepository>();
         services.AddScoped<IRequestTypeVersionRepository, RequestTypeVersionRepository>();
         services.AddScoped<IRequestTypeRequiredDocumentRepository, RequestTypeRequiredDocumentRepository>();
+        services.AddScoped<IRequestTypeValidationRepository, RequestTypeValidationRepository>();
+        services.AddScoped<IRequestTypeValidationDocumentRepository, RequestTypeValidationDocumentRepository>();
         services.AddScoped<ISettingsRepository, SettingsRepository>();
 
         return services;
