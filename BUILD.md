@@ -80,8 +80,23 @@ or `Debug.Identity.Enabled` is false in `appsettings.json`).
 dotnet test VendorSure.slnx
 ```
 
-There are no tests yet (Chunk 1a adds no asserts). The test projects exist
-and `dotnet test` should report zero failures.
+### Integration tests against the dev DB
+
+`VendorSure.Infrastructure.Tests` runs against the same dev SQL Server the
+app uses. Before the first run:
+
+1. Copy `tests/VendorSure.Infrastructure.Tests/appsettings.Test.example.json`
+   → `tests/VendorSure.Infrastructure.Tests/appsettings.Test.json` and fill
+   in the connection string. The file is gitignored.
+
+2. Make sure the `VenSure` database has the §16 settings rows from
+   `data-model.sql`. The tests assume the seeded set is present.
+
+Tests modify rows in `try/finally` blocks and restore the original value.
+If a test crashes mid-flight, one setting value may be left modified —
+recover by re-running the §16 INSERT block from `data-model.sql` or fixing
+the affected key by hand. The current probe key is
+`AI.Polling.IntervalMinutes` (original value: `5`).
 
 ## Solution layout
 

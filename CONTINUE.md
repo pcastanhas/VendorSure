@@ -4,17 +4,17 @@
 
 ## Where we are
 
-**Phase 1 in progress.** Chunks 1-4 done (solution scaffold + MudBlazor,
-Serilog file logging, DB connection factory, debug identity shim).
-Next: Chunk 5 (Settings repository).
+**Phase 1 in progress.** Chunks 1-5 done (solution scaffold + MudBlazor,
+Serilog file logging, DB connection factory, debug identity shim, Settings
+repository with tests). Next: Chunk 6 (Settings list page).
 
 Read these to get oriented:
-- `docs/PLAN.md` — the phase/chunk roadmap. **Next step is Phase 1 / Chunk 5.**
+- `docs/PLAN.md` — the phase/chunk roadmap. **Next step is Phase 1 / Chunk 6.**
 - `docs/data-model.sql` — the reviewed schema.
 - `docs/CONCEPT.md` — design intent (§3.1 and §3.2 are stale; refreshed in
   Phase 6 / Phase 9).
 - `BUILD.md` — how to build/run locally. Current state: scaffold + MudBlazor
-  + Serilog + DB + debug identity.
+  + Serilog + DB + debug identity + Settings repository.
 - `LessonsLearned.md` — running log of gotchas. Two entries so far.
 - `docs/REMOVE-BEFORE-PROD.md` — first real entries (debug identity shim).
 
@@ -103,11 +103,10 @@ and `dotnet test`, reports back.
 
 ## Suggested next session
 
-**Phase 1 / Chunk 5 — Settings repository.**
+**Phase 1 / Chunk 6 — Settings list page.**
 
-Per `docs/PLAN.md` Phase 1 Chunk 5: Dapper-based `SettingsRepository` in
-Infrastructure with `GetAllAsync()`, `GetByKeyAsync(string key)`,
-`UpdateValueAsync(string key, string? value)`. Repository interface in
-Services. Tests in `VendorSure.Infrastructure.Tests` against the dev DB.
+Per `docs/PLAN.md` Phase 1 Chunk 6: `/admin/settings` route. MudTable of
+all settings rows (description, value, required, sensitive). Sensitive
+values masked. Read-only.
 
 PAT note: each session, user provides a short-lived PAT for the repo.

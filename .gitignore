@@ -13,6 +13,7 @@ logs/
 **/appsettings.json
 **/appsettings.Development.json
 **/appsettings.Production.json
+**/appsettings.Test.json
 
 # User secrets
 **/secrets.json

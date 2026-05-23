@@ -1,7 +1,9 @@
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
+using VendorSure.Infrastructure.Configuration;
 using VendorSure.Infrastructure.Data;
 using VendorSure.Infrastructure.Identity;
+using VendorSure.Services.Configuration;
 using VendorSure.Services.Data;
 using VendorSure.Services.Identity;
 
@@ -24,6 +26,7 @@ public static class ServiceCollectionExtensions
         services.AddHostedService<DatabaseReachabilityCheck>();
 
         services.AddScoped<IUserRepository, UserRepository>();
+        services.AddScoped<ISettingsRepository, SettingsRepository>();
 
         return services;
     }
