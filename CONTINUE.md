@@ -4,28 +4,22 @@
 
 ## Where we are
 
-**Phase 3 complete (with rollup).** Both chunks plus docs rollup done.
-Document-type catalog admin surface (`/admin/required-documents`) is
-fully built — first admin page with a hard-delete affordance, gated by
-the cross-table "referenced by Request Type version" rule. Next:
-Phase 4 / Chunk 1 (RequestType + RequestTypeVersion repositories).
+**Phase 4 in progress.** Chunk 1 done (RequestType + RequestTypeVersion
+repositories, including the version-table immutability rule, the
+`CreateWithFirstDraftAsync` transactional convenience method, and the
+RequestState enum with char↔enum mapping in the repo). Next: Phase 4
+/ Chunk 2 (RequestTypeRequiredDocuments junction repository).
 
 Read these to get oriented:
-- `docs/PLAN.md` — the phase/chunk roadmap. **Next step is Phase 4 / Chunk 1.**
-  Phase 4 is the biggest yet (9 chunks): the Request Types editor with
-  its tabbed body (header / required documents / validations /
-  selection prompt) and state machine (Draft → In Service →
-  Superseded). The Workflows tab stays empty here; Phase 5 fills it
-  with the designer.
+- `docs/PLAN.md` — the phase/chunk roadmap. **Next step is Phase 4 / Chunk 2.**
 - `docs/data-model.sql` — the reviewed schema.
-- `docs/CONCEPT.md` — design intent. §3.3 reflects Settings, User
-  Groups, Users, and Required Documents admin pages. §3.1 and §3.2
-  still scheduled for refresh in Phase 6 / Phase 9.
+- `docs/CONCEPT.md` — design intent. §3.3 covers Settings, User Groups,
+  Users, Required Documents admin pages; §3.1 and §3.2 still scheduled
+  for refresh in Phase 6 / Phase 9. The "Versioning & immutability"
+  and "Lifecycle states" sub-sections of §3.3 drive Chunk 1's SQL.
 - `BUILD.md` — how to build/run locally. "What's currently built
   (Phases 1-3)" summarises the shipped surface.
-- `LessonsLearned.md` — seven entries (added the MudBlazor 9.0
-  `ShowMessageBox` → `ShowMessageBoxAsync` rename caught during Phase
-  3 Chunk 2).
+- `LessonsLearned.md` — seven entries.
 - `docs/REMOVE-BEFORE-PROD.md` — debug identity shim cutover checklist.
 
 ## Approach rules (locked in during design)
@@ -113,18 +107,13 @@ and `dotnet test`, reports back.
 
 ## Suggested next session
 
-**Phase 4 / Chunk 1 — RequestType + RequestTypeVersion repositories.**
+**Phase 4 / Chunk 2 — RequestTypeRequiredDocuments junction repository.**
 
-Per `docs/PLAN.md` Phase 4 Chunk 1: paired Dapper repositories for
-`request_types` and `request_type_versions`. These are the deepest
-relationships in the schema so far (parent-child with state-machine
-constraints on the version), and the design call from PLAN.md is to
-do them with hand-curated multi-mapping rather than EF or any
-abstraction. Tests against dev DB.
-
-The two tables together carry the immutability story (Draft → In
-Service → Superseded with snapshot-on-bind semantics). Worth re-
-reading CONCEPT.md §3.3's 'Versioning & immutability' and 'Lifecycle
-states' sub-sections before writing the SQL.
+Per `docs/PLAN.md` Phase 4 Chunk 2: a small repository for the
+`request_type_required_documents` junction table. Add/remove links from
+a Request Type version to the document-type library.
+Cross-table rule worth enforcing: junction mutations should be refused
+unless the parent version is in Draft (mirrors the immutability rule
+from Chunk 1). Tests against dev DB.
 
 PAT note: each session, user provides a short-lived PAT for the repo.

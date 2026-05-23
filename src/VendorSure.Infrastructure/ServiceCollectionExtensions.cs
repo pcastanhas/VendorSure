@@ -4,10 +4,12 @@ using VendorSure.Infrastructure.Configuration;
 using VendorSure.Infrastructure.Data;
 using VendorSure.Infrastructure.Documents;
 using VendorSure.Infrastructure.Identity;
+using VendorSure.Infrastructure.RequestTypes;
 using VendorSure.Services.Configuration;
 using VendorSure.Services.Data;
 using VendorSure.Services.Documents;
 using VendorSure.Services.Identity;
+using VendorSure.Services.RequestTypes;
 
 namespace VendorSure.Infrastructure;
 
@@ -30,6 +32,8 @@ public static class ServiceCollectionExtensions
         services.AddScoped<IUserRepository, UserRepository>();
         services.AddScoped<IUserGroupRepository, UserGroupRepository>();
         services.AddScoped<IDocumentTypeRepository, DocumentTypeRepository>();
+        services.AddScoped<IRequestTypeRepository, RequestTypeRepository>();
+        services.AddScoped<IRequestTypeVersionRepository, RequestTypeVersionRepository>();
         services.AddScoped<ISettingsRepository, SettingsRepository>();
 
         return services;
