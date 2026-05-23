@@ -202,6 +202,18 @@ once you see it; the cost is the round trip.
    methods. Worth a search whenever I'm reaching for a method I
    haven't actually called in this codebase yet.
 
+   **Update during Phase 4 / Chunk 5:** two more renames caught
+   pre-commit while building the Request Type detail page:
+   `MudTabs.PanelClass` → `TabPanelsClass` (and `TabPanelClass` →
+   `TabButtonsClass`); `MudGrid` does NOT have an `AlignItems`
+   parameter (it's `MudStack` that does — `MudGrid` only has
+   `Spacing` and `Justify`). The pattern is the same as Lesson #7:
+   muscle memory from a different version or a different MudBlazor
+   container suggests an API that doesn't exist on this one. The fix
+   for both was a quick API-surface search before commit, saving a
+   round-trip. **Don't trust generic familiarity with the framework;
+   verify the API surface on the exact component on the exact version.**
+
 2. The rest of the dialog API is unchanged in 9.x:
    `DialogService.ShowAsync<T>(title, parameters, options)`,
    `DialogResult.Ok(data)`, `DialogResult.Canceled`, `DialogOptions`,

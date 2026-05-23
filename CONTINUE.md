@@ -4,15 +4,14 @@
 
 ## Where we are
 
-**Phase 4 in progress.** Chunks 1-4 done (RequestType +
-RequestTypeVersion repositories with immutability rule;
-RequestTypeRequiredDocuments junction repository; RequestTypeValidations
-+ ValidationDocuments repositories; Request Types admin list page at
-`/admin/request-types`). Next: Phase 4 / Chunk 5 (Request Type detail
-page — header tab).
+**Phase 4 in progress.** Chunks 1-5 done (repositories for type +
+version, junction, validations + validation-doc junction; admin
+list page; detail page with header section + type-level edit + tabs
+scaffold). Next: Phase 4 / Chunk 6 (Required Documents tab on the
+detail page).
 
 Read these to get oriented:
-- `docs/PLAN.md` — the phase/chunk roadmap. **Next step is Phase 4 / Chunk 5.**
+- `docs/PLAN.md` — the phase/chunk roadmap. **Next step is Phase 4 / Chunk 6.**
 - `docs/data-model.sql` — the reviewed schema.
 - `docs/CONCEPT.md` — design intent. §3.3 covers Settings, User Groups,
   Users, Required Documents admin pages; §3.1 and §3.2 still scheduled
@@ -108,21 +107,12 @@ and `dotnet test`, reports back.
 
 ## Suggested next session
 
-**Phase 4 / Chunk 5 — Request Type detail page (header tab).**
+**Phase 4 / Chunk 6 — Required Documents tab.**
 
-Per `docs/PLAN.md` Phase 4 Chunk 5: route
-`/admin/request-types/{id}` — currently 404s because Chunk 4 wired
-navigation to this URL ahead of time. Header section shows name,
-current version, state, audit info (created_ts, placed_in_service_ts,
-superseded_ts), and is editable only when the latest version's state
-= Draft. Tabs across the top: Workflows (empty placeholder until
-Phase 5), Required Documents (Chunk 6), Validations (Chunk 7),
-Selection Prompt (Chunk 8). This chunk delivers the page shell plus
-the header — subsequent chunks fill in each tab.
-
-The "edit only when Draft" affordance is the first UI surface for the
-immutability invariant the repos already enforce — if admin opens a
-type whose latest version is In Service or Superseded, the header
-section is read-only and a banner explains why.
+Per `docs/PLAN.md` Phase 4 Chunk 6: fill in the "Required Documents"
+tab on the detail page with a multi-select picker against the
+DocumentType library. Wire to `IRequestTypeRequiredDocumentRepository`
+(built in Chunk 2). The picker is Draft-only — when the displayed
+version isn't Draft, the tab shows the attached docs read-only.
 
 PAT note: each session, user provides a short-lived PAT for the repo.

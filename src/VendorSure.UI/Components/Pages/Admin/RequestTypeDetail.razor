@@ -1,0 +1,296 @@
+@page "/admin/request-types/{Id:int}"
+@attribute [Authorize]
+
+@using Microsoft.AspNetCore.Authorization
+@using VendorSure.Domain.RequestTypes
+@using VendorSure.Services.RequestTypes
+
+@inject IRequestTypeRepository TypeRepository
+@inject IRequestTypeVersionRepository VersionRepository
+@inject ISnackbar Snackbar
+@inject NavigationManager Navigation
+@inject ILogger<RequestTypeDetail> Logger
+
+<PageTitle>@PageTitleText — VendorSure</PageTitle>
+
+@if (_loading)
+{
+    <MudProgressLinear Indeterminate="true" Color="Color.Primary" Class="my-2" />
+}
+else if (_type is null)
+{
+    <MudAlert Severity="Severity.Warning" Class="mb-4">
+        Request type <code>id=@Id</code> not found.
+        <MudLink Href="/admin/request-types">Back to list</MudLink>.
+    </MudAlert>
+}
+else
+{
+    @* --- Type-level edit surface ---------------------------------- *@
+    <MudPaper Elevation="1" Class="pa-4 mb-4">
+        <MudStack Row="true" AlignItems="AlignItems.Center" Class="mb-3">
+            <MudStack Spacing="0">
+                <MudText Typo="Typo.overline" Class="mud-text-secondary">Request type</MudText>
+                <MudText Typo="Typo.h5">
+                    @_type.Name
+                    @if (!_type.IsActive)
+                    {
+                        <MudChip T="string" Size="Size.Small" Color="Color.Default" Class="ml-2" Variant="Variant.Outlined">Inactive</MudChip>
+                    }
+                </MudText>
+            </MudStack>
+            <MudSpacer />
+            <MudLink Href="/admin/request-types">← Back to list</MudLink>
+        </MudStack>
+
+        <MudGrid Spacing="3">
+            <MudItem xs="12" md="6">
+                <MudTextField @bind-Value="_editedName"
+                              Label="Name"
+                              Variant="Variant.Outlined"
+                              Immediate="true"
+                              Error="@TypeNameIsInvalid"
+                              ErrorText="Name is required."
+                              MaxLength="100" />
+            </MudItem>
+            <MudItem xs="12" md="3" Class="d-flex align-center">
+                <MudSwitch T="bool" @bind-Value="_editedIsActive" Color="Color.Success">
+                    Active
+                </MudSwitch>
+            </MudItem>
+            <MudItem xs="12" md="3" Class="d-flex align-center">
+                <MudSwitch T="bool" @bind-Value="_editedIsExplanationRequired" Color="Color.Primary">
+                    Explanation required
+                </MudSwitch>
+            </MudItem>
+            <MudItem xs="12" Class="d-flex justify-end">
+                <MudButton Variant="Variant.Filled"
+                           Color="Color.Primary"
+                           OnClick="SaveTypeAsync"
+                           Disabled="@(TypeNameIsInvalid || _savingType)"
+                           StartIcon="@Icons.Material.Filled.Save">
+                    Save type
+                </MudButton>
+            </MudItem>
+        </MudGrid>
+    </MudPaper>
+
+    @* --- Version selector & metadata ----------------------------- *@
+    <MudPaper Elevation="1" Class="pa-4 mb-4">
+        @if (_versions.Count == 0)
+        {
+            <MudText Class="mud-text-secondary">
+                This type has no versions yet. (Unexpected — every type
+                should be created with a Draft v1.)
+            </MudText>
+        }
+        else
+        {
+            <MudGrid Spacing="3">
+                <MudItem xs="12" md="4">
+                    <MudSelect T="int"
+                               Value="@_selectedVersionId"
+                               ValueChanged="@OnVersionChanged"
+                               Label="Version"
+                               Variant="Variant.Outlined">
+                        @foreach (var v in _versions)
+                        {
+                            <MudSelectItem T="int" Value="@v.Id">
+                                v@(v.Version) — @StateLabel(v.RequestState)
+                            </MudSelectItem>
+                        }
+                    </MudSelect>
+                </MudItem>
+                <MudItem xs="12" md="8">
+                    @if (_selectedVersion is not null)
+                    {
+                        <MudStack Spacing="1">
+                            <VersionTimestampLine Label="Created"
+                                                  Value="@_selectedVersion.CreatedTs" />
+                            <VersionTimestampLine Label="Placed in service"
+                                                  Value="@_selectedVersion.PlacedInServiceTs" />
+                            <VersionTimestampLine Label="Superseded"
+                                                  Value="@_selectedVersion.SupersededTs" />
+                        </MudStack>
+                    }
+                </MudItem>
+            </MudGrid>
+
+            @if (_selectedVersion is not null && _selectedVersion.RequestState != RequestState.Draft)
+            {
+                <MudAlert Severity="Severity.Info" Class="mt-3" Dense="true">
+                    Version v@(_selectedVersion.Version) is <strong>@StateLabel(_selectedVersion.RequestState)</strong>
+                    and immutable. To make changes, create a new Draft (coming in Chunk 9).
+                </MudAlert>
+            }
+        }
+    </MudPaper>
+
+    @* --- Tabs scaffold (filled in Chunks 6-8 and Phase 5) -------- *@
+    <MudPaper Elevation="1">
+        <MudTabs Outlined="true" Position="Position.Top" Rounded="true" TabPanelsClass="pa-4">
+            <MudTabPanel Text="Workflows" Icon="@Icons.Material.Filled.AccountTree">
+                <MudAlert Severity="Severity.Info" Variant="Variant.Text">
+                    Workflow designer ships in Phase 5.
+                </MudAlert>
+            </MudTabPanel>
+            <MudTabPanel Text="Required Documents" Icon="@Icons.Material.Filled.Description">
+                <MudAlert Severity="Severity.Info" Variant="Variant.Text">
+                    Required-documents picker ships in Phase 4 / Chunk 6.
+                </MudAlert>
+            </MudTabPanel>
+            <MudTabPanel Text="Validations" Icon="@Icons.Material.Filled.RuleFolder">
+                <MudAlert Severity="Severity.Info" Variant="Variant.Text">
+                    Validations editor ships in Phase 4 / Chunk 7.
+                </MudAlert>
+            </MudTabPanel>
+            <MudTabPanel Text="Selection Prompt" Icon="@Icons.Material.Filled.AltRoute">
+                <MudAlert Severity="Severity.Info" Variant="Variant.Text">
+                    Selection-prompt editor ships in Phase 4 / Chunk 8.
+                </MudAlert>
+            </MudTabPanel>
+        </MudTabs>
+    </MudPaper>
+}
+
+@code {
+    [Parameter] public int Id { get; set; }
+
+    private RequestType? _type;
+    private IReadOnlyList<RequestTypeVersion> _versions = Array.Empty<RequestTypeVersion>();
+    private RequestTypeVersion? _selectedVersion;
+    private int _selectedVersionId;
+
+    private string _editedName = string.Empty;
+    private bool _editedIsActive;
+    private bool _editedIsExplanationRequired;
+
+    private bool _loading = true;
+    private bool _savingType;
+
+    private string PageTitleText => _type is null ? "Request Type" : _type.Name;
+    private bool TypeNameIsInvalid => string.IsNullOrWhiteSpace(_editedName);
+
+    protected override async Task OnParametersSetAsync()
+    {
+        // OnParametersSetAsync fires when the route parameter changes too;
+        // re-load if we navigated between two ids in one circuit.
+        await LoadAsync();
+    }
+
+    private async Task LoadAsync()
+    {
+        _loading = true;
+        try
+        {
+            _type = await TypeRepository.GetByIdAsync(Id);
+            if (_type is null)
+            {
+                _versions = Array.Empty<RequestTypeVersion>();
+                _selectedVersion = null;
+                _selectedVersionId = 0;
+                return;
+            }
+
+            // Seed the edit form with the current values.
+            _editedName = _type.Name;
+            _editedIsActive = _type.IsActive;
+            _editedIsExplanationRequired = _type.IsExplanationRequired;
+
+            _versions = await VersionRepository.GetByRequestTypeIdAsync(Id);
+            PickDefaultVersion();
+        }
+        catch (Exception ex)
+        {
+            Logger.LogError(ex, "Failed to load Request Type detail (id={Id}).", Id);
+            Snackbar.Add("Failed to load. Check the log.", Severity.Error);
+            _type = null;
+        }
+        finally
+        {
+            _loading = false;
+        }
+    }
+
+    private void PickDefaultVersion()
+    {
+        // Preference order: Draft (highest version number if multiple), then
+        // InService, then the most-recent Superseded. The list comes back
+        // ascending by version number — easier to reason about iterating
+        // in reverse and picking the first match per state.
+        var byVersionDesc = _versions.OrderByDescending(v => v.Version).ToList();
+
+        _selectedVersion =
+            byVersionDesc.FirstOrDefault(v => v.RequestState == RequestState.Draft)
+            ?? byVersionDesc.FirstOrDefault(v => v.RequestState == RequestState.InService)
+            ?? byVersionDesc.FirstOrDefault();
+
+        _selectedVersionId = _selectedVersion?.Id ?? 0;
+    }
+
+    private void OnVersionChanged(int versionId)
+    {
+        _selectedVersionId = versionId;
+        _selectedVersion = _versions.FirstOrDefault(v => v.Id == versionId);
+    }
+
+    private async Task SaveTypeAsync()
+    {
+        if (_type is null || TypeNameIsInvalid) return;
+
+        _savingType = true;
+        try
+        {
+            var edited = new RequestType
+            {
+                Id = _type.Id,
+                Name = _editedName.Trim(),
+                IsExplanationRequired = _editedIsExplanationRequired,
+                IsActive = _editedIsActive,
+            };
+            var result = await TypeRepository.UpdateAsync(edited);
+            switch (result)
+            {
+                case UpdateRequestTypeResult.Updated:
+                    Logger.LogInformation("Request type {Id} updated by admin UI.", _type.Id);
+                    Snackbar.Add($"Saved {edited.Name}.", Severity.Success);
+                    await LoadAsync();
+                    break;
+
+                case UpdateRequestTypeResult.NotFound:
+                    Logger.LogWarning("UpdateAsync NotFound for request type id={Id}.", _type.Id);
+                    Snackbar.Add(
+                        $"Could not save — request type no longer exists. Returning to list.",
+                        Severity.Warning);
+                    Navigation.NavigateTo("/admin/request-types");
+                    break;
+
+                case UpdateRequestTypeResult.RejectedNameConflict:
+                    Logger.LogWarning(
+                        "Update rejected: request type name '{Name}' collides with another row.",
+                        edited.Name);
+                    Snackbar.Add(
+                        $"Cannot save: another request type already has the name '{edited.Name}'.",
+                        Severity.Error);
+                    break;
+            }
+        }
+        catch (Exception ex)
+        {
+            Logger.LogError(ex, "Failed to save request type id={Id}.", _type.Id);
+            Snackbar.Add($"Failed to save: {ex.Message}", Severity.Error);
+        }
+        finally
+        {
+            _savingType = false;
+        }
+    }
+
+    private static string StateLabel(RequestState state) => state switch
+    {
+        RequestState.Draft => "Draft",
+        RequestState.InService => "In Service",
+        RequestState.Superseded => "Superseded",
+        _ => state.ToString(),
+    };
+}

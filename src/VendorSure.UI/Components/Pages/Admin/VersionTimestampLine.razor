@@ -1,0 +1,25 @@
+@*
+    Tiny helper for the version-metadata block: "Label: 2026-05-01 14:23"
+    or "Label: —" when the value is null. Kept as its own component so
+    the alignment and the null-rendering rule live in one place rather
+    than being repeated in the parent markup.
+*@
+
+<MudStack Row="true" Spacing="2" AlignItems="AlignItems.Baseline">
+    <MudText Typo="Typo.body2" Class="mud-text-secondary" Style="min-width: 140px;">
+        @Label
+    </MudText>
+    @if (Value is DateTime dt)
+    {
+        <MudText Typo="Typo.body2">@dt.ToLocalTime().ToString("yyyy-MM-dd HH:mm")</MudText>
+    }
+    else
+    {
+        <MudText Typo="Typo.body2" Class="mud-text-disabled">—</MudText>
+    }
+</MudStack>
+
+@code {
+    [Parameter, EditorRequired] public string Label { get; set; } = string.Empty;
+    [Parameter] public DateTime? Value { get; set; }
+}
