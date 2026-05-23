@@ -4,14 +4,14 @@
 
 ## Where we are
 
-**Phase 4 in progress.** Chunk 1 done (RequestType + RequestTypeVersion
-repositories, including the version-table immutability rule, the
-`CreateWithFirstDraftAsync` transactional convenience method, and the
-RequestState enum with char↔enum mapping in the repo). Next: Phase 4
-/ Chunk 2 (RequestTypeRequiredDocuments junction repository).
+**Phase 4 in progress.** Chunks 1-2 done (RequestType + RequestTypeVersion
+repositories with the immutability rule and `CreateWithFirstDraftAsync`;
+RequestTypeRequiredDocuments junction repository with parent-Draft
+guard on all mutations). Next: Phase 4 / Chunk 3 (RequestTypeValidations
+and ValidationDocuments repositories).
 
 Read these to get oriented:
-- `docs/PLAN.md` — the phase/chunk roadmap. **Next step is Phase 4 / Chunk 2.**
+- `docs/PLAN.md` — the phase/chunk roadmap. **Next step is Phase 4 / Chunk 3.**
 - `docs/data-model.sql` — the reviewed schema.
 - `docs/CONCEPT.md` — design intent. §3.3 covers Settings, User Groups,
   Users, Required Documents admin pages; §3.1 and §3.2 still scheduled
@@ -107,13 +107,12 @@ and `dotnet test`, reports back.
 
 ## Suggested next session
 
-**Phase 4 / Chunk 2 — RequestTypeRequiredDocuments junction repository.**
+**Phase 4 / Chunk 3 — RequestTypeValidations + ValidationDocuments
+repositories.**
 
-Per `docs/PLAN.md` Phase 4 Chunk 2: a small repository for the
-`request_type_required_documents` junction table. Add/remove links from
-a Request Type version to the document-type library.
-Cross-table rule worth enforcing: junction mutations should be refused
-unless the parent version is in Draft (mirrors the immutability rule
-from Chunk 1). Tests against dev DB.
+Per `docs/PLAN.md` Phase 4 Chunk 3: CRUD for `request_type_validations`
+(the per-validation prompt + execution order) and the
+`request_type_validation_documents` junction (which library docs each
+validation looks at). Same Draft-only mutation pattern as Chunks 1-2.
 
 PAT note: each session, user provides a short-lived PAT for the repo.
