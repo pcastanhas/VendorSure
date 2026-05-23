@@ -1,27 +1,59 @@
 using MudBlazor.Services;
+using Serilog;
 using VendorSure.UI.Components;
 
-var builder = WebApplication.CreateBuilder(args);
+// Bootstrap logger: catches anything that explodes before host config is read.
+// Replaced below once configuration is available.
+Log.Logger = new LoggerConfiguration()
+    .MinimumLevel.Information()
+    .WriteTo.Console()
+    .CreateBootstrapLogger();
 
-builder.Services.AddRazorComponents()
-    .AddInteractiveServerComponents();
-
-builder.Services.AddMudServices();
-
-var app = builder.Build();
-
-if (!app.Environment.IsDevelopment())
+try
 {
-    app.UseExceptionHandler("/Error", createScopeForErrors: true);
-    app.UseHsts();
+    Log.Information("VendorSure UI starting up");
+
+    var builder = WebApplication.CreateBuilder(args);
+
+    // Serilog takes over from the default ASP.NET logger. Config comes from
+    // appsettings.json under the "Serilog" section.
+    builder.Host.UseSerilog((context, services, configuration) => configuration
+        .ReadFrom.Configuration(context.Configuration)
+        .ReadFrom.Services(services)
+        .Enrich.FromLogContext());
+
+    builder.Services.AddRazorComponents()
+        .AddInteractiveServerComponents();
+
+    builder.Services.AddMudServices();
+
+    var app = builder.Build();
+
+    if (!app.Environment.IsDevelopment())
+    {
+        app.UseExceptionHandler("/Error", createScopeForErrors: true);
+        app.UseHsts();
+    }
+    app.UseStatusCodePagesWithReExecute("/not-found", createScopeForStatusCodePages: true);
+    app.UseHttpsRedirection();
+
+    app.UseSerilogRequestLogging();
+
+    app.UseAntiforgery();
+
+    app.MapStaticAssets();
+    app.MapRazorComponents<App>()
+        .AddInteractiveServerRenderMode();
+
+    Log.Information("VendorSure UI ready — environment {Environment}", app.Environment.EnvironmentName);
+
+    app.Run();
 }
-app.UseStatusCodePagesWithReExecute("/not-found", createScopeForStatusCodePages: true);
-app.UseHttpsRedirection();
-
-app.UseAntiforgery();
-
-app.MapStaticAssets();
-app.MapRazorComponents<App>()
-    .AddInteractiveServerRenderMode();
-
-app.Run();
+catch (Exception ex)
+{
+    Log.Fatal(ex, "VendorSure UI terminated unexpectedly");
+}
+finally
+{
+    Log.CloseAndFlush();
+}

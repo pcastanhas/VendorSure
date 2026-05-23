@@ -18,9 +18,10 @@
 
 2. Copy `src/VendorSure.UI/appsettings.example.json` →
    `src/VendorSure.UI/appsettings.json` and fill in any environment-specific
-   values. (For Chunk 1a there's nothing to fill in — the example and the
-   real file are identical. Later chunks add a connection string, Serilog
-   config, the debug identity shim, etc.)
+   values. The example carries the Serilog configuration block (file sink,
+   daily rolling, 30-day retention) which the app needs to start; for now
+   that's the entire file. Later chunks add a connection string, the debug
+   identity shim, etc.
 
 3. Restore packages and build:
 
@@ -70,8 +71,16 @@ Dependency direction: `UI` and `BackgroundWorkers` → `Services` →
 
 ## Logs
 
-Serilog with file sink (daily rolling, 30-day retention) wires up in
-Chunk 1b. Until then, console logging only.
+Serilog writes to `logs/app-YYYY-MM-DD.log` in the working directory (next
+to the `VendorSure.UI` binary at runtime). Daily rolling, 30-day retention.
+The console sink also writes to stdout while the app is in the foreground.
+
+Sample startup banner you should see in the log:
+
+```
+[HH:MM:SS INF] VendorSure UI starting up
+[HH:MM:SS INF] VendorSure UI ready — environment Development
+```
 
 ## Schema changes
 

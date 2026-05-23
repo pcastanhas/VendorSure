@@ -4,19 +4,17 @@
 
 ## Where we are
 
-**Phase 1 in progress.** Chunk 1 (solution scaffold + MudBlazor shell) is
-done. Next: Chunk 2 (Serilog wiring).
-
-The chunk numbering was refined at start of session: original PLAN.md
-Chunk 1 was bundling four distinct things; split into 1/2/3 (scaffold,
-Serilog, DB connection). The rest of Phase 1 renumbered up to 7.
+**Phase 1 in progress.** Chunks 1 and 2 done (solution scaffold +
+MudBlazor, Serilog file logging). Next: Chunk 3 (DB connection factory +
+startup reachability check).
 
 Read these to get oriented:
-- `docs/PLAN.md` — the phase/chunk roadmap. **Next step is Phase 1 / Chunk 2.**
+- `docs/PLAN.md` — the phase/chunk roadmap. **Next step is Phase 1 / Chunk 3.**
 - `docs/data-model.sql` — the reviewed schema.
 - `docs/CONCEPT.md` — design intent (§3.1 and §3.2 are stale; refreshed in
   Phase 6 / Phase 9).
-- `BUILD.md` — how to build/run locally. Current state: scaffold + MudBlazor.
+- `BUILD.md` — how to build/run locally. Current state: scaffold + MudBlazor
+  + Serilog.
 - `LessonsLearned.md` — running log of gotchas. Two entries so far.
 - `docs/REMOVE-BEFORE-PROD.md` — cutover checklist (skeleton).
 
@@ -105,11 +103,12 @@ and `dotnet test`, reports back.
 
 ## Suggested next session
 
-**Phase 1 / Chunk 2 — Serilog wiring.**
+**Phase 1 / Chunk 3 — DB connection factory + startup reachability check.**
 
-Per `docs/PLAN.md` Phase 1 Chunk 2: add Serilog with file sink, daily
-rolling, 30-day retention; configuration in the example appsettings;
-startup writes a banner line. Test: `dotnet run` produces
-`logs/app-YYYY-MM-DD.log` with the banner entry.
+Per `docs/PLAN.md` Phase 1 Chunk 3: `IDbConnectionFactory` interface in
+Services; `SqlConnectionFactory` impl in Infrastructure using
+`Microsoft.Data.SqlClient`. Connection string read from `appsettings.json`
+via `IOptions<T>`. Startup runs a `SELECT 1` and logs "connected to
+VenSure" or "DB unreachable: <reason>". App still boots either way.
 
 PAT note: each session, user provides a short-lived PAT for the repo.
