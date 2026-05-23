@@ -4,21 +4,24 @@
 
 ## Where we are
 
-**Phase 3 in progress.** Chunk 1 done (DocumentType repository with
-delete-when-unreferenced rule). Next: Phase 3 / Chunk 2 (Required
-Documents Library admin page).
+**Phase 3 complete.** All 2 chunks done (DocumentType repository,
+Required Documents admin page). Next: Phase 3 docs rollup, then
+Phase 4 (Request Types — the largest phase so far at 9 chunks).
 
 Read these to get oriented:
-- `docs/PLAN.md` — the phase/chunk roadmap. **Next step is Phase 3 / Chunk 2.**
+- `docs/PLAN.md` — the phase/chunk roadmap. **Next step is the Phase 3
+  docs-rollup commit, then Phase 4 / Chunk 1.**
 - `docs/data-model.sql` — the reviewed schema.
 - `docs/CONCEPT.md` — design intent. §3.3 reflects the Settings,
-  User Groups, and Users admin pages; §3.1 and §3.2 still scheduled
-  for refresh in Phase 6 / Phase 9.
-- `BUILD.md` — how to build/run locally. "What's currently built
-  (Phases 1-2)" summarises the shipped surface.
-- `LessonsLearned.md` — running log of gotchas. Six entries (the
-  Phase 2 cross-table-rules entry now also covers Phase 3 Chunk 1's
-  delete rule, same pattern).
+  User Groups, and Users admin pages; will pick up Required Documents
+  in the rollup. §3.1 and §3.2 still scheduled for refresh in Phase 6
+  / Phase 9.
+- `BUILD.md` — how to build/run locally. "What's currently built"
+  summarises shipped surface, will pick up Phase 3 in the rollup.
+- `LessonsLearned.md` — six entries. May or may not grow at the
+  rollup depending on whether anything new emerged (the
+  ShowMessageBox→ShowMessageBoxAsync MudBlazor 9.0 rename caught
+  during Chunk 2 might warrant a note).
 - `docs/REMOVE-BEFORE-PROD.md` — debug identity shim cutover checklist.
 
 ## Approach rules (locked in during design)
@@ -106,16 +109,12 @@ and `dotnet test`, reports back.
 
 ## Suggested next session
 
-**Phase 3 / Chunk 2 — Required Documents Library admin page.**
+**Phase 3 docs rollup, then Phase 4 / Chunk 1.**
 
-Per `docs/PLAN.md` Phase 3 Chunk 2: `/admin/required-documents` route.
-MudTable list + New/Edit dialog + Delete button (with confirmation).
-Same pattern as the Phase 2 admin pages. Maps Create/Update/Delete
-outcomes to distinct snackbar messages — including the
-`RejectedReferenced` case for delete attempts on doc types referenced
-by Request Type versions.
-
-After this chunk, Phase 3 wraps with a docs rollup, then Phase 4
-begins (Request Types, the largest phase so far with 9 chunks).
+Per the locked-in approach rules: at the end of every phase, one
+commit covering `BUILD.md`, `CONCEPT.md` (if affected),
+`LessonsLearned.md`, `PLAN.md`, and `CONTINUE.md`. Then Phase 4 begins
+with the RequestType + RequestTypeVersion repositories — first chunk
+of nine in PLAN.md.
 
 PAT note: each session, user provides a short-lived PAT for the repo.

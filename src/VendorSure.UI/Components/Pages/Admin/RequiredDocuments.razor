@@ -1,0 +1,276 @@
+@page "/admin/required-documents"
+@attribute [Authorize]
+
+@using Microsoft.AspNetCore.Authorization
+@using VendorSure.Domain.Documents
+@using VendorSure.Services.Documents
+
+@inject IDocumentTypeRepository DocRepository
+@inject IDialogService DialogService
+@inject ISnackbar Snackbar
+@inject ILogger<RequiredDocuments> Logger
+
+<PageTitle>Required Documents — VendorSure</PageTitle>
+
+<MudStack Row="true" AlignItems="AlignItems.Center" Class="mb-4">
+    <MudStack Spacing="0">
+        <MudText Typo="Typo.h4">Required Documents</MudText>
+        <MudText Typo="Typo.body2" Class="mud-text-secondary">
+            The catalog of document types that Request Types can require
+            submitters to upload.
+        </MudText>
+    </MudStack>
+    <MudSpacer />
+    <MudButton Variant="Variant.Filled"
+               Color="Color.Primary"
+               StartIcon="@Icons.Material.Filled.Add"
+               OnClick="OpenCreateDialog">
+        New document type
+    </MudButton>
+</MudStack>
+
+<MudTable Items="@_items"
+          Dense="true"
+          Hover="true"
+          Loading="@_loading"
+          LoadingProgressColor="Color.Primary"
+          Elevation="1">
+    <HeaderContent>
+        <MudTh>Name</MudTh>
+        <MudTh Style="width: 180px;">File type hint</MudTh>
+        <MudTh Style="width: 110px;"></MudTh>
+    </HeaderContent>
+    <RowTemplate>
+        <MudTd DataLabel="Name">@context.Name</MudTd>
+        <MudTd DataLabel="File type hint">
+            @if (!string.IsNullOrEmpty(context.FileTypeRequired))
+            {
+                <code>@context.FileTypeRequired</code>
+            }
+            else
+            {
+                <span class="mud-text-disabled">—</span>
+            }
+        </MudTd>
+        <MudTd Style="text-align: right;">
+            <MudIconButton Icon="@Icons.Material.Filled.Edit"
+                           Size="Size.Small"
+                           OnClick="@(() => OpenEditDialog(context))"
+                           aria-label="@($"Edit {context.Name}")" />
+            <MudIconButton Icon="@Icons.Material.Filled.Delete"
+                           Size="Size.Small"
+                           Color="Color.Error"
+                           OnClick="@(() => ConfirmAndDelete(context))"
+                           aria-label="@($"Delete {context.Name}")" />
+        </MudTd>
+    </RowTemplate>
+    <NoRecordsContent>
+        <MudText>No document types yet. Click "New document type" to create one.</MudText>
+    </NoRecordsContent>
+    <LoadingContent>
+        <MudText>Loading…</MudText>
+    </LoadingContent>
+</MudTable>
+
+@code {
+    private IReadOnlyList<DocumentType> _items = Array.Empty<DocumentType>();
+    private bool _loading = true;
+
+    protected override async Task OnInitializedAsync() => await LoadAsync();
+
+    private async Task LoadAsync()
+    {
+        _loading = true;
+        try
+        {
+            _items = await DocRepository.GetAllAsync();
+        }
+        catch (Exception ex)
+        {
+            Logger.LogError(ex, "Failed to load document types.");
+            _items = Array.Empty<DocumentType>();
+            Snackbar.Add("Failed to load document types. Check the log for details.", Severity.Error);
+        }
+        finally
+        {
+            _loading = false;
+        }
+    }
+
+    private async Task OpenCreateDialog()
+    {
+        var blank = new DocumentType
+        {
+            Id = 0,
+            Name = string.Empty,
+            FileTypeRequired = null,
+        };
+
+        var parameters = new DialogParameters<EditDocumentTypeDialog>
+        {
+            { x => x.DocType, blank },
+        };
+
+        await ShowDialogAndHandleAsync("New document type", parameters, isCreate: true);
+    }
+
+    private async Task OpenEditDialog(DocumentType doc)
+    {
+        var parameters = new DialogParameters<EditDocumentTypeDialog>
+        {
+            { x => x.DocType, doc },
+        };
+
+        await ShowDialogAndHandleAsync($"Edit {doc.Name}", parameters, isCreate: false);
+    }
+
+    private async Task ShowDialogAndHandleAsync(
+        string title,
+        DialogParameters<EditDocumentTypeDialog> parameters,
+        bool isCreate)
+    {
+        var options = new DialogOptions
+        {
+            CloseOnEscapeKey = true,
+            MaxWidth = MaxWidth.Small,
+            FullWidth = true,
+        };
+
+        var dialog = await DialogService.ShowAsync<EditDocumentTypeDialog>(title, parameters, options);
+        var result = await dialog.Result;
+        if (result is null || result.Canceled) return;
+
+        if (result.Data is not DocumentType doc)
+        {
+            Logger.LogWarning(
+                "Edit dialog returned unexpected data type {Type}.",
+                result.Data?.GetType().Name ?? "null");
+            return;
+        }
+
+        if (isCreate) await SaveCreateAsync(doc);
+        else await SaveUpdateAsync(doc);
+    }
+
+    private async Task SaveCreateAsync(DocumentType doc)
+    {
+        try
+        {
+            var result = await DocRepository.CreateAsync(doc);
+            switch (result.Outcome)
+            {
+                case CreateDocumentTypeOutcome.Created:
+                    Logger.LogInformation(
+                        "Document type '{Name}' created (id={Id}) by admin UI.",
+                        doc.Name, result.Id);
+                    Snackbar.Add($"Created {doc.Name}.", Severity.Success);
+                    await LoadAsync();
+                    break;
+
+                case CreateDocumentTypeOutcome.RejectedNameConflict:
+                    Logger.LogWarning(
+                        "Create rejected: document type name '{Name}' already in use.",
+                        doc.Name);
+                    Snackbar.Add(
+                        $"Cannot create '{doc.Name}': another document type already has that name.",
+                        Severity.Error);
+                    break;
+            }
+        }
+        catch (Exception ex)
+        {
+            Logger.LogError(ex, "Failed to create document type '{Name}'.", doc.Name);
+            Snackbar.Add($"Failed to create {doc.Name}: {ex.Message}", Severity.Error);
+        }
+    }
+
+    private async Task SaveUpdateAsync(DocumentType doc)
+    {
+        try
+        {
+            var result = await DocRepository.UpdateAsync(doc);
+            switch (result)
+            {
+                case UpdateDocumentTypeResult.Updated:
+                    Logger.LogInformation("Document type {Id} updated by admin UI.", doc.Id);
+                    Snackbar.Add($"Saved {doc.Name}.", Severity.Success);
+                    await LoadAsync();
+                    break;
+
+                case UpdateDocumentTypeResult.NotFound:
+                    Logger.LogWarning("UpdateAsync NotFound for document type id={Id}.", doc.Id);
+                    Snackbar.Add(
+                        $"Could not save {doc.Name} — the document type no longer exists.",
+                        Severity.Warning);
+                    await LoadAsync();
+                    break;
+
+                case UpdateDocumentTypeResult.RejectedNameConflict:
+                    Logger.LogWarning(
+                        "Update rejected: document type name '{Name}' collides with another row.",
+                        doc.Name);
+                    Snackbar.Add(
+                        $"Cannot save {doc.Name}: another document type already has that name.",
+                        Severity.Error);
+                    break;
+            }
+        }
+        catch (Exception ex)
+        {
+            Logger.LogError(ex, "Failed to update document type id={Id}.", doc.Id);
+            Snackbar.Add($"Failed to save {doc.Name}: {ex.Message}", Severity.Error);
+        }
+    }
+
+    private async Task ConfirmAndDelete(DocumentType doc)
+    {
+        var confirmed = await DialogService.ShowMessageBoxAsync(
+            title: $"Delete {doc.Name}?",
+            markupMessage: new MarkupString(
+                $"This removes the document type from the library. " +
+                $"It cannot be deleted if any Request Type version uses it."),
+            yesText: "Delete",
+            cancelText: "Cancel",
+            options: new DialogOptions { CloseOnEscapeKey = true });
+
+        if (confirmed != true) return;
+
+        try
+        {
+            var result = await DocRepository.DeleteAsync(doc.Id);
+            switch (result)
+            {
+                case DeleteDocumentTypeResult.Deleted:
+                    Logger.LogInformation(
+                        "Document type {Id} ('{Name}') deleted by admin UI.",
+                        doc.Id, doc.Name);
+                    Snackbar.Add($"Deleted {doc.Name}.", Severity.Success);
+                    await LoadAsync();
+                    break;
+
+                case DeleteDocumentTypeResult.NotFound:
+                    Logger.LogWarning("DeleteAsync NotFound for document type id={Id}.", doc.Id);
+                    Snackbar.Add(
+                        $"{doc.Name} no longer exists.",
+                        Severity.Warning);
+                    await LoadAsync();
+                    break;
+
+                case DeleteDocumentTypeResult.RejectedReferenced:
+                    Logger.LogWarning(
+                        "Delete rejected: document type id={Id} ('{Name}') is referenced by " +
+                        "one or more Request Type versions.",
+                        doc.Id, doc.Name);
+                    Snackbar.Add(
+                        $"Cannot delete {doc.Name}: it is used by one or more Request Type versions.",
+                        Severity.Error);
+                    break;
+            }
+        }
+        catch (Exception ex)
+        {
+            Logger.LogError(ex, "Failed to delete document type id={Id}.", doc.Id);
+            Snackbar.Add($"Failed to delete {doc.Name}: {ex.Message}", Severity.Error);
+        }
+    }
+}
