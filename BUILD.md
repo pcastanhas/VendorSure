@@ -13,9 +13,9 @@
   table on the first request; both need to work for the app to come up
   signed in.
 
-## What's currently built (Phases 1-2)
+## What's currently built (Phases 1-3)
 
-End-to-end surface as of the Phase 2 rollup:
+End-to-end surface as of the Phase 3 rollup:
 
 **Foundation (Phase 1):**
 
@@ -49,6 +49,15 @@ End-to-end surface as of the Phase 2 rollup:
 - The "Local Dev" seed user and "Developers" seed group from setup
   step 3 below now appear in the admin UI; you can edit them through
   the pages instead of running SQL.
+
+**Document catalog admin (Phase 3):**
+
+- Required Documents admin page at `/admin/required-documents` —
+  list/create/edit/delete the catalog of document types Request Types
+  can later require. First admin page with a hard delete: confirmation
+  via `ShowMessageBoxAsync`, repository rejects deletion of any row
+  referenced by a Request Type version. Snackbar maps each outcome
+  (Deleted, NotFound, RejectedReferenced) distinctly.
 
 ## First-time setup
 

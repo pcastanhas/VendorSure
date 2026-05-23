@@ -163,10 +163,18 @@ for the chunks that follow:
 
 ---
 
-## Phase 3 — Required Documents Library
+## Phase 3 — Required Documents Library ✓ COMPLETE
 
 **Goal.** Admin can manage the catalog of document types that Request Types
 will pick from.
+
+**Outcome:** both chunks shipped. Established the first hard-delete
+affordance in the admin UI, including the cross-table "rejected when
+referenced" rule (same atomic SQL pattern as Phase 2's deactivation
+rules) and the `MudDialogService.ShowMessageBoxAsync` confirmation
+pattern. Entity named `DocumentType` rather than `RequiredDocument` —
+see Chunk 1 commit for the naming rationale and namespace
+(`VendorSure.Domain.Documents`).
 
 ### Chunks
 

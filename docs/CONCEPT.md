@@ -97,6 +97,13 @@ Where Compliance and admins configure the system. Gated by `user.is_admin = true
   returns a result enum so the UI can map specific rejection reasons
   (entraid collision, inactive group, has-users) to distinct snackbar
   messages.
+- **Required Documents** — Phase 3. The catalog of document types
+  Request Types can later demand from submitters. Same list / dialog
+  shape as the Phase 2 admin pages, plus a first-of-its-kind hard
+  delete: the repository allows deletion only when no Request Type
+  version references the row, enforced atomically in the DELETE
+  statement's WHERE clause. The UI confirms before deleting via
+  `MudDialogService.ShowMessageBoxAsync`.
 - **Request Types screen:** list of active request types. New / edit (double-click).
 - **Request Type editor:** a header section (name, created date, version, audit info) and a tabbed body. Known tabs so far:
   - **Workflows** — the workflows that can service this request type. Clicking a workflow opens the workflow designer.

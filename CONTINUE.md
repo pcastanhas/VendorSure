@@ -4,24 +4,28 @@
 
 ## Where we are
 
-**Phase 3 complete.** All 2 chunks done (DocumentType repository,
-Required Documents admin page). Next: Phase 3 docs rollup, then
-Phase 4 (Request Types — the largest phase so far at 9 chunks).
+**Phase 3 complete (with rollup).** Both chunks plus docs rollup done.
+Document-type catalog admin surface (`/admin/required-documents`) is
+fully built — first admin page with a hard-delete affordance, gated by
+the cross-table "referenced by Request Type version" rule. Next:
+Phase 4 / Chunk 1 (RequestType + RequestTypeVersion repositories).
 
 Read these to get oriented:
-- `docs/PLAN.md` — the phase/chunk roadmap. **Next step is the Phase 3
-  docs-rollup commit, then Phase 4 / Chunk 1.**
+- `docs/PLAN.md` — the phase/chunk roadmap. **Next step is Phase 4 / Chunk 1.**
+  Phase 4 is the biggest yet (9 chunks): the Request Types editor with
+  its tabbed body (header / required documents / validations /
+  selection prompt) and state machine (Draft → In Service →
+  Superseded). The Workflows tab stays empty here; Phase 5 fills it
+  with the designer.
 - `docs/data-model.sql` — the reviewed schema.
-- `docs/CONCEPT.md` — design intent. §3.3 reflects the Settings,
-  User Groups, and Users admin pages; will pick up Required Documents
-  in the rollup. §3.1 and §3.2 still scheduled for refresh in Phase 6
-  / Phase 9.
-- `BUILD.md` — how to build/run locally. "What's currently built"
-  summarises shipped surface, will pick up Phase 3 in the rollup.
-- `LessonsLearned.md` — six entries. May or may not grow at the
-  rollup depending on whether anything new emerged (the
-  ShowMessageBox→ShowMessageBoxAsync MudBlazor 9.0 rename caught
-  during Chunk 2 might warrant a note).
+- `docs/CONCEPT.md` — design intent. §3.3 reflects Settings, User
+  Groups, Users, and Required Documents admin pages. §3.1 and §3.2
+  still scheduled for refresh in Phase 6 / Phase 9.
+- `BUILD.md` — how to build/run locally. "What's currently built
+  (Phases 1-3)" summarises the shipped surface.
+- `LessonsLearned.md` — seven entries (added the MudBlazor 9.0
+  `ShowMessageBox` → `ShowMessageBoxAsync` rename caught during Phase
+  3 Chunk 2).
 - `docs/REMOVE-BEFORE-PROD.md` — debug identity shim cutover checklist.
 
 ## Approach rules (locked in during design)
@@ -109,12 +113,18 @@ and `dotnet test`, reports back.
 
 ## Suggested next session
 
-**Phase 3 docs rollup, then Phase 4 / Chunk 1.**
+**Phase 4 / Chunk 1 — RequestType + RequestTypeVersion repositories.**
 
-Per the locked-in approach rules: at the end of every phase, one
-commit covering `BUILD.md`, `CONCEPT.md` (if affected),
-`LessonsLearned.md`, `PLAN.md`, and `CONTINUE.md`. Then Phase 4 begins
-with the RequestType + RequestTypeVersion repositories — first chunk
-of nine in PLAN.md.
+Per `docs/PLAN.md` Phase 4 Chunk 1: paired Dapper repositories for
+`request_types` and `request_type_versions`. These are the deepest
+relationships in the schema so far (parent-child with state-machine
+constraints on the version), and the design call from PLAN.md is to
+do them with hand-curated multi-mapping rather than EF or any
+abstraction. Tests against dev DB.
+
+The two tables together carry the immutability story (Draft → In
+Service → Superseded with snapshot-on-bind semantics). Worth re-
+reading CONCEPT.md §3.3's 'Versioning & immutability' and 'Lifecycle
+states' sub-sections before writing the SQL.
 
 PAT note: each session, user provides a short-lived PAT for the repo.

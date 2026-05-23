@@ -173,3 +173,38 @@ a rule that needs orchestration across multiple writes, or one that
 can't be expressed in SQL** — not "we have N ≥ 2 rules." Deferred,
 explicitly. Revisit in Phase 4-5 when validation runners and workflow
 state may need genuine orchestration.
+
+## 2026-05-23 — MudBlazor 9.0 renamed `ShowMessageBox` → `ShowMessageBoxAsync`
+
+When writing the Required Documents delete confirmation in Phase 3 /
+Chunk 2 I reached for the idiomatic `await
+DialogService.ShowMessageBox(...)` pattern, which is what every
+tutorial and answer dating from MudBlazor 6/7/8 shows. In MudBlazor
+9.0 the method was renamed to `ShowMessageBoxAsync` (PR #12292,
+breaking change). The old name is gone — calling it is a compile
+error, not a deprecation warning.
+
+I caught it before committing by web-searching the API while writing
+the code, but only because something nudged me to double-check.
+Without that check it would have been a round-trip: agent commits →
+developer pulls, build fails, reports back → agent fixes. The shape of
+the failure ("method not found on DialogService") is easy to diagnose
+once you see it; the cost is the round trip.
+
+**Lesson, two parts:**
+
+1. MudBlazor 9.x renamed several legacy synchronous-looking methods to
+   `*Async` for consistency. If pre-9.0 examples are the only thing I
+   can recall for an API, **search before using it** — assume
+   something renamed. Other affected names from the 9.0 release notes
+   that may bite us later: `MudDialogContainer.OnMouseUp` →
+   `OnMouseUpAsync`, MudFormComponent's various Reset / Touched
+   methods. Worth a search whenever I'm reaching for a method I
+   haven't actually called in this codebase yet.
+
+2. The rest of the dialog API is unchanged in 9.x:
+   `DialogService.ShowAsync<T>(title, parameters, options)`,
+   `DialogResult.Ok(data)`, `DialogResult.Canceled`, `DialogOptions`,
+   `DialogParameters<T>`. So when in doubt, follow the shape of
+   `EditUserDialog`/`EditUserGroupDialog`/`EditDocumentTypeDialog` —
+   those compile and work on 9.4.
