@@ -13,9 +13,9 @@
   table on the first request; both need to work for the app to come up
   signed in.
 
-## What's currently built (Phases 1-3)
+## What's currently built (Phases 1-4)
 
-End-to-end surface as of the Phase 3 rollup:
+End-to-end surface as of the Phase 4 rollup:
 
 **Foundation (Phase 1):**
 
@@ -58,6 +58,43 @@ End-to-end surface as of the Phase 3 rollup:
   via `ShowMessageBoxAsync`, repository rejects deletion of any row
   referenced by a Request Type version. Snackbar maps each outcome
   (Deleted, NotFound, RejectedReferenced) distinctly.
+
+**Request Type editor (Phase 4):**
+
+- Request Types list page at `/admin/request-types` — one row per
+  type with chip-styled version indicators for In Service / Draft /
+  Superseded count. "New request type" creates the type and its
+  initial Draft v1 atomically (single SQL transaction). Open-in-new
+  icon navigates to the detail page.
+- Request Type detail page at `/admin/request-types/{id}` — three
+  vertically-stacked sections:
+  1. **Type-level edit** — Name, IsActive, IsExplanationRequired with
+     Save button. Type-level fields apply across all versions and are
+     always editable (immutability is a per-version rule, not per-type).
+  2. **Version selector + metadata + transition buttons** — dropdown
+     of versions; Created / Placed in service / Superseded timestamps;
+     "Place v{N} in service" button (Draft only) and "Create new
+     Draft" button (when no Draft exists). The transition buttons are
+     the visible face of `TransitionToInServiceAsync` and
+     `CreateDraftAsync`.
+  3. **Four tabs** — Workflows (placeholder until Phase 5), Required
+     Documents, Validations, Selection Prompt.
+- **Required Documents tab** — table of library entries × attachment
+  state per version. Toggle attached/required; read-only when the
+  displayed version isn't Draft.
+- **Validations tab** — table of validations in execution order with
+  Add / Edit / Delete and a Documents sub-picker per validation.
+  The sub-picker is scoped to the version's currently-attached
+  required documents because the validation-document junction enforces
+  same-version (the schema FKs only enforce existence).
+- **Selection Prompt tab** — single multi-line textarea bound to the
+  version's `workflow_selection_prompt`; Save enabled only when dirty.
+- **State transitions** — placing a Draft in service is transactional:
+  the prior In Service version (if any) is demoted to Superseded with
+  `superseded_ts` set, and the new version is promoted with
+  `placed_in_service_ts` set, both using the same DateTime value so
+  the audit timestamps line up exactly. UPDLOCK on the initial Draft
+  check serialises concurrent promotion attempts.
 
 ## First-time setup
 
@@ -153,20 +190,36 @@ If a test crashes mid-flight some cleanup may be needed:
   and the delete-rejection test also stands up rows in `dbo.request_types`,
   `dbo.request_type_versions`, and `dbo.request_type_required_documents`.
   All `_test_`-prefixed; FK order matters for cleanup.
+- **Request Type / Version / Junction / Validation tests** create rows
+  in `dbo.request_types`, `dbo.request_type_versions`,
+  `dbo.request_type_required_documents`, `dbo.request_type_validations`,
+  and `dbo.request_type_validation_documents`. All `_test_`-prefixed.
+  Idempotent `IAsyncDisposable` fixture handles cleanup in FK order;
+  if a test fixture itself crashes the cleanup query below covers it.
 
 Cleanup query if needed (run in FK-safe order):
 
   ```sql
+  DELETE FROM dbo.request_type_validation_documents
+   WHERE request_type_validation_id IN (
+       SELECT v.id FROM dbo.request_type_validations v
+       INNER JOIN dbo.request_type_versions ver ON ver.id = v.request_type_version_id
+       INNER JOIN dbo.request_types t           ON t.id = ver.request_type_id
+       WHERE t.name LIKE '_test_%');
+  DELETE FROM dbo.request_type_validations
+   WHERE request_type_version_id IN (
+       SELECT id FROM dbo.request_type_versions
+        WHERE request_type_id IN (SELECT id FROM dbo.request_types WHERE name LIKE '_test_%'));
   DELETE FROM dbo.request_type_required_documents
    WHERE required_document_library_id IN
        (SELECT id FROM dbo.required_documents_library WHERE name LIKE '_test_%');
   DELETE FROM dbo.request_type_versions
    WHERE request_type_id IN
        (SELECT id FROM dbo.request_types WHERE name LIKE '_test_%');
-  DELETE FROM dbo.request_types          WHERE name    LIKE '_test_%';
-  DELETE FROM dbo.required_documents_library WHERE name LIKE '_test_%';
-  DELETE FROM dbo.users                  WHERE entraid LIKE '_test_%';
-  DELETE FROM dbo.user_groups            WHERE name    LIKE '_test_%';
+  DELETE FROM dbo.request_types              WHERE name    LIKE '_test_%';
+  DELETE FROM dbo.required_documents_library WHERE name    LIKE '_test_%';
+  DELETE FROM dbo.users                      WHERE entraid LIKE '_test_%';
+  DELETE FROM dbo.user_groups                WHERE name    LIKE '_test_%';
   ```
 
 ## Solution layout

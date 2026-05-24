@@ -258,3 +258,163 @@ abstractions one. Specifically:
 Rule of thumb: production code can reference *only the abstractions*
 to keep coupling low. Host code (Program.cs, test fixtures) needs the
 concrete packages.
+
+## 2026-05-23 — Same-version invariant via INNER JOIN
+
+The `request_type_validation_documents` junction (Chunk 3) attaches a
+validation row to a required-document row. The schema's FKs on each
+column only enforce that the referenced rows exist; they don't enforce
+that both belong to the same Request Type version. But same-version is
+a real invariant — a validation looking at documents from a foreign
+version makes no sense.
+
+The cleanest way to enforce it is at the INSERT, in one statement:
+
+```sql
+INSERT INTO dbo.request_type_validation_documents (...)
+SELECT @validationId, @requiredDocId
+WHERE EXISTS (
+    SELECT 1
+    FROM dbo.request_type_validations val
+    INNER JOIN dbo.request_type_required_documents rd
+        ON rd.request_type_version_id = val.request_type_version_id
+    INNER JOIN dbo.request_type_versions ver
+        ON ver.id = val.request_type_version_id
+    WHERE val.id = @validationId
+      AND rd.id = @requiredDocId
+      AND ver.request_state = @draftCode);
+```
+
+The `INNER JOIN ... ON rd.request_type_version_id = val.request_type_version_id`
+**is** the same-version check. The join produces a row exactly when:
+
+- both endpoints exist (otherwise the joined rows wouldn't be there
+  for the EXISTS to find), AND
+- they share a `request_type_version_id` (otherwise the JOIN's ON
+  predicate doesn't match).
+
+No separate equality check, no extra round-trip. The schema's FKs
+handle existence; the JOIN handles same-version-ness. When two
+existence checks AND a same-row check have to combine into one
+atomic gate, an INNER JOIN with both endpoints in the WHERE is the
+right shape. Worth remembering for any cross-junction invariant
+the schema can't express directly.
+
+## 2026-05-23 — UPDLOCK for atomic read-then-update
+
+The Phase 4 / Chunk 9 `TransitionToInServiceAsync` is the first method
+to mutate `request_state` after the initial Draft seed. Promotion is a
+multi-row operation: the target Draft moves to In Service, and the
+prior In Service (if any) moves to Superseded. Both happen in one
+transaction.
+
+The naïve shape — `SELECT type_id FROM ... WHERE state = 'D'` then
+two `UPDATE` statements — has a race window:
+
+- Caller A reads version X's type id, finds it's Draft on type T.
+- Caller B reads X's type id concurrently, also finds it's Draft on T.
+- A's UPDATEs run: prior InService of T → Superseded, X → InService.
+- B's UPDATEs run: prior InService of T (now X, just promoted) →
+  Superseded, X → InService (idempotent).
+- Net result: B has demoted A's just-promoted version. Wrong.
+
+Fix: serialise with `UPDLOCK` on the initial SELECT.
+
+```sql
+SELECT request_type_id
+FROM dbo.request_type_versions WITH (UPDLOCK, ROWLOCK)
+WHERE id = @versionId AND request_state = 'D';
+```
+
+`UPDLOCK` holds an exclusive lock on the row for the duration of the
+transaction, blocking any other transaction trying to do the same
+read. Caller B blocks on this SELECT until A commits, then re-reads
+the row and finds `request_state != 'D'` (A's UPDATE already moved
+it). B's SELECT returns no row, B returns `RejectedNotDraft`. No
+race.
+
+When to reach for UPDLOCK: any "check then mutate" sequence within a
+transaction where the check determines whether the mutation should
+proceed AND concurrent callers could each pass the check independently.
+Alternatives like `SERIALIZABLE` isolation work but are coarser
+(everything in the transaction holds locks); `READ COMMITTED SNAPSHOT`
+doesn't help because the issue isn't dirty reads, it's that both
+readers see the same valid state and then both write. A schema-level
+filtered unique index (e.g., `UNIQUE (request_type_id) WHERE
+request_state = 'I'`) would also enforce at-most-one-InService and
+turn the race into a constraint violation; that's a more durable
+solution and worth considering if more transition rules show up.
+For now, `UPDLOCK` on the read is the minimal change with the right
+semantics.
+
+Pair the lock with a single C#-captured timestamp passed to both
+UPDATEs (instead of `SYSUTCDATETIME()` in each) so the new
+`placed_in_service_ts` equals the prior `superseded_ts` exactly —
+makes the audit story line up nicely when reading the version log
+chronologically.
+
+## 2026-05-23 — Pre-commit MudBlazor API-surface check is worth the minute
+
+Phase 4 caught **three** MudBlazor 9.x API bugs at the "let me search
+the docs for this attribute" step, before commit:
+
+- `MudTabs.PanelClass` → renamed to `TabPanelsClass` in v9.0 (Chunk 5).
+- `MudGrid` does not have an `AlignItems` parameter (that's `MudStack`)
+  — `MudGrid` only has `Spacing` and `Justify` (Chunk 5).
+- (Also: `MudCheckBox.Value/ValueChanged` was renamed from
+  `Checked/CheckedChanged` in v7 — confirmed before use in Chunk 6.)
+
+The common shape: I wrote markup from muscle memory or recall, and
+the syntax LOOKED right because it matched analogous components or
+older versions. A 60-second web search before commit avoided a round-
+trip on each. **The check is cheap; the round-trip isn't.** Specifically
+worth searching when:
+
+- Reaching for an attribute on a component I haven't actually called
+  in this codebase yet.
+- Generalising from one component's API to a sibling's (e.g.
+  "MudStack has AlignItems, MudGrid probably does too" — wrong).
+- Using a method or attribute by recall after a major-version jump
+  (MudBlazor 6 → 7 → 9 each had renames).
+
+Lesson #7 (the original `ShowMessageBox` → `ShowMessageBoxAsync`
+rename) was the first instance; Phase 4 made the pattern explicit
+and worth its own lesson. The catalog of catches lives in #7's body;
+future Phase 5+ catches should land there too rather than
+proliferating into new entries.
+
+## 2026-05-23 — When delete is multi-row, transaction; when add/update is multi-row, conditional
+
+Two transactional-write patterns emerged in Phase 4 and they look
+different on purpose.
+
+**Pattern A — multi-row DELETE: explicit transaction.** Chunk 3's
+`RequestTypeValidationRepository.DeleteAsync` and Chunk 9's
+`TransitionToInServiceAsync` both write to multiple rows, and both
+use `BeginTransaction()` + `transaction.Commit()` / `Rollback()`.
+The reasoning: each statement is independent; if the connection
+drops between them, the half-applied state is bad (orphan junction
+rows, or a promoted-but-not-demoted version). The transaction
+boundary guarantees all-or-nothing.
+
+**Pattern B — multi-condition INSERT/UPDATE: conditional WHERE.**
+Chunk 2's `AddAsync` on the required-docs junction enforces four
+rules (version exists, version is Draft, library exists, pair isn't
+already attached) in one statement with `INSERT ... SELECT ... WHERE
+EXISTS (...) AND EXISTS (...) AND NOT EXISTS (...)`. No transaction
+needed — one statement is atomic by default. If any condition fails,
+zero rows insert and `SCOPE_IDENTITY` returns NULL.
+
+The distinction is: Pattern A's atomicity requirement is across
+*multiple statements*; Pattern B's is across *multiple conditions
+within one statement*. Reach for a transaction only when the unit of
+atomicity actually spans statements. A single conditional statement
+gives atomicity for free.
+
+Corollary: when Pattern B's "zero rows" case needs to be
+disambiguated (RejectedDuplicate vs RejectedNotDraft vs
+RejectedVersionNotFound), follow up with focused probes outside the
+transaction, in specificity order. The probes can race with their own
+window but the answer doesn't matter — "X doesn't exist anymore" and
+"X exists but state is wrong" are both legitimate observations of
+the post-failure world.

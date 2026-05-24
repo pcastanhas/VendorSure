@@ -104,13 +104,61 @@ Where Compliance and admins configure the system. Gated by `user.is_admin = true
   version references the row, enforced atomically in the DELETE
   statement's WHERE clause. The UI confirms before deleting via
   `MudDialogService.ShowMessageBoxAsync`.
-- **Request Types screen:** list of active request types. New / edit (double-click).
-- **Request Type editor:** a header section (name, created date, version, audit info) and a tabbed body. Known tabs so far:
-  - **Workflows** — the workflows that can service this request type. Clicking a workflow opens the workflow designer.
-  - **Required Documents** — the documents the submission portal must demand for this request type.
-  - **Validation Prompts** — the prevalidation prompt for the AI triage layer.
-  - **Workflow Selection Prompts** — the workflow-selection prompt for the AI triage layer.
-- **Workflow designer:** a visual flowchart canvas with start nodes, process nodes (rectangles), decision nodes (diamonds), and terminal nodes. Compliance composes workflows by dragging IT-authored blocks onto the canvas and wiring them together.
+- **Request Types** — Phase 4. The full editor surface: a list page
+  at `/admin/request-types` shows each type with chip-styled
+  indicators for its current In Service / Draft / Superseded
+  versions; a detail page at `/admin/request-types/{id}` opens the
+  editor proper. The list "New request type" affordance creates the
+  type and its initial Draft v1 atomically in one transaction
+  (`CreateWithFirstDraftAsync`), so a freshly-created type is
+  immediately ready to edit.
+- **Request Type editor:** three vertically-stacked sections plus
+  four tabs.
+  - **Top: type-level edit.** Name, IsActive, IsExplanationRequired,
+    Save. These fields live on `request_types` (one row per type, not
+    per version) so editing them applies across all versions — the
+    immutability rule is per-version, not per-type.
+  - **Middle: version selector + audit.** Dropdown of all versions
+    (defaulting to Draft if one exists, else In Service, else most
+    recent Superseded), three labelled timestamp rows (Created,
+    Placed in service, Superseded), and the two transition buttons
+    ("Place v{N} in service" when the displayed version is Draft;
+    "Create new Draft" when no Draft exists). When the displayed
+    version is not Draft, an info banner explains it's immutable and
+    points the admin toward the existing Draft or the Create-Draft
+    button.
+  - **Bottom: four tabs.**
+    - **Workflows** — placeholder until Phase 5 ships the designer.
+    - **Required Documents** — table of the document-type library
+      with an Attached checkbox and Required switch per row. Toggling
+      Attached calls the junction repo's Add/Remove; Required calls
+      SetRequired. When the displayed version isn't Draft, only the
+      attached rows are shown and all controls are disabled (a
+      read-only audit view of what was attached when the version
+      was placed in service).
+    - **Validations** — table of validations in execution order with
+      Add / Edit / Delete and a Documents sub-picker per row. The
+      sub-picker is scoped to the version's currently-attached
+      required documents because the validation-document junction
+      enforces same-version atomically in the INSERT — the schema
+      FKs only enforce existence, not version match. Creating a
+      validation auto-appends its execution_order
+      (`ISNULL(MAX, 0) + 1`); reordering isn't exposed in v1.
+    - **Selection Prompt** — single multi-line textarea bound to
+      the version's `workflow_selection_prompt`. Save enabled only
+      when dirty relative to what was loaded; empty/whitespace
+      normalises to NULL in the column. Read-only when the displayed
+      version isn't Draft.
+  - **State transitions.** Placing a Draft in service is the first
+    multi-row state mutation in the system: in one transaction the
+    prior In Service version of the same type (if any) is demoted to
+    Superseded with `superseded_ts`, and the target Draft is promoted
+    to In Service with `placed_in_service_ts`. Both rows take the
+    same `DateTime` value so the audit timestamps line up exactly.
+    An UPDLOCK on the initial Draft check serialises concurrent
+    callers attempting to promote the same Draft, so only one
+    transition can succeed.
+- **Workflow designer:** a visual flowchart canvas with start nodes, process nodes (rectangles), decision nodes (diamonds), and terminal nodes. Compliance composes workflows by dragging IT-authored blocks onto the canvas and wiring them together. **Phase 5.** The Phase 4 Workflows tab is the entry point.
   - The designer is a **dumb canvas**. It does **not** validate the graph, walk branches, type-check artifact inputs/outputs, or warn about unreachable nodes. If a design is broken (e.g., a block needs an artifact that no upstream block produces), it fails at runtime and gets fixed in a new Request Type version.
 
 #### Versioning & immutability

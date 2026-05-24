@@ -4,26 +4,28 @@
 
 ## Where we are
 
-**Phase 4 chunks complete (1-9).** All nine chunks shipped:
+**Phase 4 ✓ COMPLETE.** All nine chunks plus rollup shipped:
 repositories for type + version + junctions + validations +
 validation-doc junction; admin list page; detail page with header,
 type-level edit, version selector, version-level edits; all four
 tabs filled (Workflows placeholder for Phase 5, Required Documents,
 Validations, Selection Prompt); state transitions (Create new Draft,
-Place in Service with atomic prior-In-Service supersede). Next: the
-Phase 4 rollup commit (docs sync — BUILD / CONCEPT / LessonsLearned /
-PLAN — same pattern as the Phase 1-3 rollups).
+Place in Service with atomic prior-In-Service supersede). Next:
+Phase 5 (Workflow Designer). Design conversation first — the chunk
+plan in PLAN.md §"Phase 5" is provisional and explicitly expected
+to evolve.
 
 Read these to get oriented:
-- `docs/PLAN.md` — the phase/chunk roadmap. **Next step is the Phase 4 doc rollup.**
+- `docs/PLAN.md` — the phase/chunk roadmap. **Next step is Phase 5
+  — Workflow Designer.** Provisional chunk list; expect a design
+  conversation before starting Chunk 1.
 - `docs/data-model.sql` — the reviewed schema.
 - `docs/CONCEPT.md` — design intent. §3.3 covers Settings, User Groups,
-  Users, Required Documents admin pages; §3.1 and §3.2 still scheduled
-  for refresh in Phase 6 / Phase 9. The "Versioning & immutability"
-  and "Lifecycle states" sub-sections of §3.3 drive Chunk 1's SQL.
+  Users, Required Documents, and the Request Type editor in detail;
+  §3.1 and §3.2 still scheduled for refresh in Phase 6 / Phase 9.
 - `BUILD.md` — how to build/run locally. "What's currently built
-  (Phases 1-3)" summarises the shipped surface.
-- `LessonsLearned.md` — seven entries.
+  (Phases 1-4)" summarises the shipped surface.
+- `LessonsLearned.md` — twelve entries.
 - `docs/REMOVE-BEFORE-PROD.md` — debug identity shim cutover checklist.
 
 ## Approach rules (locked in during design)
@@ -111,32 +113,31 @@ and `dotnet test`, reports back.
 
 ## Suggested next session
 
-**Phase 4 doc rollup.**
+**Phase 5 — Workflow Designer.**
 
-Same pattern as the Phase 1, 2, and 3 rollups: one commit that syncs
-the docs to the shipped surface. Specifically:
+The Phase 4 detail page's Workflows tab is the landing surface; what
+happens inside it is the Phase 5 work. Per PLAN.md's risk note this
+is the biggest phase by far and the only one with unfamiliar UI work
+(JS interop for a canvas library). The chunk list in PLAN.md §"Phase 5"
+is **provisional and expected to evolve** — start with a design
+conversation, not by jumping into Chunk 1.
 
-  - **BUILD.md** — "What's currently built" section covering the
-    Request Types admin (list page, detail page, all four tabs,
-    state transitions). The test-cleanup SQL block already includes
-    the request-type tables.
-  - **CONCEPT.md §3.3** — section is partially through Phase 3 in
-    the live repo. Update to cover the Request Type editor surface
-    and the lifecycle/versioning story now that it's actually
-    implemented.
-  - **LessonsLearned.md** — any patterns or catches from Phase 4
-    chunks 1-9 that should be remembered. Notable candidates:
-    the UPDLOCK pattern from Chunk 9's TransitionToInServiceAsync;
-    the same-version invariant via INNER JOIN from Chunk 3; the
-    "transient pre-commit MudBlazor API surface check" habit that
-    caught three real bugs across Chunks 5-7.
-  - **PLAN.md** — mark Phase 4 complete; the Phase 5 (Workflow
-    Designer) entry should be revisited because we now know more
-    about how the editor is structured (the Workflows tab on the
-    detail page is the entry point).
+Key open questions to settle before coding:
 
-After the rollup: Phase 5 (Workflow Designer) begins with a fresh
-design conversation. The Phase 4 detail page's Workflows tab is the
-landing surface; what happens inside it is the Phase 5 work.
+- **Canvas library.** PLAN mentions `react-flow`, `jsPlumb` Community,
+  or a pure-SVG approach. Blazor Server + JS interop is the harness.
+  Worth a spike (Chunk 3 in PLAN) before committing.
+- **Block catalog seed.** Phase 5's blocks are IT-authored externally.
+  For development, what's the minimum seed set we need to design
+  meaningful test workflows? PLAN mentions "a small handful inserted
+  manually for testing" but doesn't name them.
+- **Coordinates persistence.** The schema stores node coordinates;
+  Phase 5 Chunk 8 saves them. Decide early whether layout is
+  per-user or shared.
+- **Validation posture.** The designer is intentionally a dumb canvas
+  (per CONCEPT.md §3.3). What's the smallest set of structural checks
+  that *do* belong in the editor, if any (e.g. "every node must have
+  an incoming edge except Start")? Or do we genuinely accept that
+  broken graphs fail at runtime?
 
 PAT note: each session, user provides a short-lived PAT for the repo.

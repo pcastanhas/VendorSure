@@ -189,12 +189,31 @@ Standard.
 
 ---
 
-## Phase 4 — Request Types (without workflow designer)
+## Phase 4 — Request Types (without workflow designer) ✓ COMPLETE
 
 **Goal.** Admin can create Request Type drafts, edit their required docs,
 validations, and workflow selection prompt. State transitions
 (Draft → In Service → Superseded) work per the agreed rules. The Workflows
 tab exists but is empty (placeholder for the designer).
+
+**Outcome:** all nine chunks shipped. Five repositories
+(`IRequestTypeRepository`, `IRequestTypeVersionRepository`,
+`IRequestTypeRequiredDocumentRepository`,
+`IRequestTypeValidationRepository`,
+`IRequestTypeValidationDocumentRepository`) and the complete admin
+editor surface (`/admin/request-types` list + `/admin/request-types/{id}`
+detail page with four tabs and the two state-transition buttons).
+Three durable patterns established here and worth carrying into
+Phase 5 onward: **immutability enforced atomically in repository
+SQL** (every mutation has a `WHERE … AND request_state = 'D'` gate, no
+race window between a state-check read and the mutation); **the
+"same-version invariant" via INNER JOIN** for cross-junction integrity
+the schema FKs don't enforce (used for the validation-document
+junction in Chunk 3); **UPDLOCK for atomic read-then-update** on the
+first repo method that mutates `request_state` (Chunk 9's
+`TransitionToInServiceAsync`, where two concurrent callers attempting
+to promote the same Draft would otherwise race past each other and
+each demote the other's not-yet-promoted row).
 
 ### Chunks
 
@@ -237,10 +256,7 @@ tab exists but is empty (placeholder for the designer).
 
 ### Phase 4 doc commit
 
-- BUILD.md and CONTINUE.md updated.
-- CONCEPT.md §3.3 fleshed out with the actual Request Type editor behavior.
-- LessonsLearned.md additions.
-- PLAN.md updated.
+Standard.
 
 ---
 
