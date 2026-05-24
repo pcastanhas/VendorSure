@@ -80,4 +80,36 @@ public sealed class BlockCatalog
     /// blocks.
     /// </summary>
     public string? Path2Decision { get; init; }
+
+    /// <summary>
+    /// Who or what executes the block at runtime. The Phase 6+
+    /// workflow engine branches on this to dispatch each block:
+    /// <see cref="BlockCatalogActorType.System"/> blocks run a
+    /// programmatic predicate or operation;
+    /// <see cref="BlockCatalogActorType.Human"/> blocks route to
+    /// an approver UI and wait for a person's decision; and
+    /// <see cref="BlockCatalogActorType.AI"/> blocks call the AI
+    /// service.
+    /// </summary>
+    public BlockCatalogActorType ActorType { get; init; }
+}
+
+/// <summary>
+/// Identifies the kind of executor for a <see cref="BlockCatalog"/>
+/// row. Stored as <c>int</c> in <c>block_catalog.actor_type</c>;
+/// values are constrained by <c>CK_block_catalog_actor_type</c>.
+/// </summary>
+public enum BlockCatalogActorType
+{
+    /// <summary>Programmatic predicate or operation. Default for
+    /// most blocks; no human or AI involvement.</summary>
+    System = 1,
+
+    /// <summary>Routes to an approver UI; awaits a person's pick
+    /// or input.</summary>
+    Human = 2,
+
+    /// <summary>Calls the AI service to evaluate the block's
+    /// predicate or produce its operation's output.</summary>
+    AI = 3,
 }

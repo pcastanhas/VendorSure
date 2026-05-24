@@ -154,7 +154,13 @@ GO
     "Clean"/"Flagged". These belong to the block, not the node: the
     block's code precodes the path semantics, so the labels are
     consistent everywhere the block is used. Populated for Decision
-    blocks (node_type_id = 3), forbidden for Process blocks. */
+    blocks (node_type_id = 3), forbidden for Process blocks.
+
+    actor_type identifies who/what executes the block at runtime:
+    1 = System (programmatic predicate or operation),
+    2 = Human (routes to an approver UI),
+    3 = AI (calls the AI service).
+    The Phase 6+ engine branches on this to dispatch the block. */
 CREATE TABLE [dbo].[block_catalog] (
     [id]              int             IDENTITY(1,1) NOT NULL,
     [node_type_id]    int             NOT NULL,
@@ -165,6 +171,7 @@ CREATE TABLE [dbo].[block_catalog] (
     [color]           char(7)         NULL,
     [path1_decision]  nvarchar(20)    NULL,
     [path2_decision]  nvarchar(20)    NULL,
+    [actor_type]      int             NOT NULL,
     CONSTRAINT [PK_block_catalog] PRIMARY KEY CLUSTERED ([id] ASC),
     CONSTRAINT [CK_block_catalog_color]
         CHECK ([color] IS NULL OR [color] LIKE '#[0-9A-Fa-f][0-9A-Fa-f][0-9A-Fa-f][0-9A-Fa-f][0-9A-Fa-f][0-9A-Fa-f]'),
@@ -178,7 +185,10 @@ CREATE TABLE [dbo].[block_catalog] (
             ([node_type_id] = 3 AND [path1_decision] IS NOT NULL AND [path2_decision] IS NOT NULL)
             OR
             ([node_type_id] = 2 AND [path1_decision] IS NULL AND [path2_decision] IS NULL)
-        )
+        ),
+    -- actor_type restricted to the three known runtime executors.
+    CONSTRAINT [CK_block_catalog_actor_type]
+        CHECK ([actor_type] IN (1, 2, 3))
 );
 GO
 

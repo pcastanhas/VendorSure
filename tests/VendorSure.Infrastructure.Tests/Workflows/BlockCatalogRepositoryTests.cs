@@ -1,5 +1,6 @@
 using Dapper;
 using Microsoft.Extensions.DependencyInjection;
+using VendorSure.Domain.Workflows;
 using VendorSure.Services.Data;
 using VendorSure.Services.Workflows;
 
@@ -36,16 +37,22 @@ public sealed class BlockCatalogRepositoryTests
         var insertedIds = new List<int>();
         try
         {
-            // Two active rows — one Process (node_type_id=2), one Decision (3).
+            // Two active rows — one Process (node_type_id=2) with
+            // System actor, one Decision (3) with Human actor. The
+            // mismatch between node type and actor type is intentional:
+            // the two fields are independent (a Process block can be
+            // System or Human or AI; same for Decision).
             var processId = await InsertBlockAsync(
                 nodeTypeId: 2, name: $"{prefix}_proc_n", description: $"{prefix}_proc",
-                className: "VendorSure.Test.ProcBlock", isActive: true, color: "#abcdef");
+                className: "VendorSure.Test.ProcBlock", isActive: true, color: "#abcdef",
+                actorType: BlockCatalogActorType.System);
             insertedIds.Add(processId);
 
             var decisionId = await InsertBlockAsync(
                 nodeTypeId: 3, name: $"{prefix}_dec_n", description: $"{prefix}_dec",
                 className: "VendorSure.Test.DecBlock", isActive: true, color: null,
-                path1Decision: "True", path2Decision: "False");
+                path1Decision: "True", path2Decision: "False",
+                actorType: BlockCatalogActorType.Human);
             insertedIds.Add(decisionId);
 
             var all = await _catalog.ListActiveAsync();
@@ -59,6 +66,7 @@ public sealed class BlockCatalogRepositoryTests
             Assert.Equal("VendorSure.Test.ProcBlock", proc.ClassName);
             Assert.True(proc.IsActive);
             Assert.Equal("#abcdef", proc.Color);
+            Assert.Equal(BlockCatalogActorType.System, proc.ActorType);
             // Process blocks must have NULL path decisions per
             // CK_block_catalog_decision_labels.
             Assert.Null(proc.Path1Decision);
@@ -71,6 +79,7 @@ public sealed class BlockCatalogRepositoryTests
             Assert.Equal("VendorSure.Test.DecBlock", dec.ClassName);
             Assert.True(dec.IsActive);
             Assert.Null(dec.Color);
+            Assert.Equal(BlockCatalogActorType.Human, dec.ActorType);
             // Decision blocks must have both path decisions populated.
             Assert.Equal("True", dec.Path1Decision);
             Assert.Equal("False", dec.Path2Decision);
@@ -168,17 +177,19 @@ public sealed class BlockCatalogRepositoryTests
 
     private async Task<int> InsertBlockAsync(
         int nodeTypeId, string name, string description, string className, bool isActive, string? color,
-        string? path1Decision = null, string? path2Decision = null)
+        string? path1Decision = null, string? path2Decision = null,
+        BlockCatalogActorType actorType = BlockCatalogActorType.System)
     {
         using var connection = await _connectionFactory.CreateOpenConnectionAsync();
         return await connection.QuerySingleAsync<int>(@"
             INSERT INTO dbo.block_catalog
                 (node_type_id, name, description, class_name, is_active, color,
-                 path1_decision, path2_decision)
+                 path1_decision, path2_decision, actor_type)
             VALUES (@nodeTypeId, @name, @description, @className, @isActive, @color,
-                    @path1Decision, @path2Decision);
+                    @path1Decision, @path2Decision, @actorType);
             SELECT CAST(SCOPE_IDENTITY() AS int);",
-            new { nodeTypeId, name, description, className, isActive, color, path1Decision, path2Decision });
+            new { nodeTypeId, name, description, className, isActive, color,
+                  path1Decision, path2Decision, actorType = (int)actorType });
     }
 
     private async Task CleanupAsync(IEnumerable<int> ids)

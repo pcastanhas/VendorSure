@@ -1388,8 +1388,8 @@ public sealed class WorkflowNodeRepositoryTests
     {
         using var c = await _connectionFactory.CreateOpenConnectionAsync();
         return await c.QuerySingleAsync<int>(@"
-            INSERT INTO dbo.block_catalog (node_type_id, name, description, class_name, is_active)
-            VALUES (2, @name, @desc, 'VendorSure.Test.NoOpBlock', 1);
+            INSERT INTO dbo.block_catalog (node_type_id, name, description, class_name, is_active, actor_type)
+            VALUES (2, @name, @desc, 'VendorSure.Test.NoOpBlock', 1, 1);
             SELECT CAST(SCOPE_IDENTITY() AS int);",
             new
             {
