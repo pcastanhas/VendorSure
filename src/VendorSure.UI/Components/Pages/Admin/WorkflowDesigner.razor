@@ -567,7 +567,7 @@ else
         // SVG <title> hover tooltip. Nodes without a block (Start and
         // terminals) get nulls and fall back to the generic node-type
         // label, no tooltip.
-        var blocksById = _blocks.ToDictionary(b => b.Id!.Value);
+        var blocksById = _blocks.ToDictionary(b => b.Id);
 
         var nodes = _nodes.Select(n =>
         {
