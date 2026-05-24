@@ -1,22 +1,30 @@
 @*
-    Workflow Designer — shell + D3 canvas.
+    Workflow Designer — shell + D3 canvas + drag-to-add palette.
 
     URL: /admin/request-types/{TypeId}/workflows/{WorkflowId}/designer
 
-    Phase 5 / Chunks 4-5:
-      - Loads the type + workflow + nodes via the repos.
+    Phase 5 / Chunks 4-6:
+      - Loads the type + workflow + nodes + block catalog via the repos.
       - Renders breadcrumb back to the type detail page.
       - Shows a read-only banner when the parent version isn't Draft.
       - On first render, instantiates the workflow-designer JS module
         (D3-backed) and mounts it inside <div id="workflow-canvas">.
         The module owns that div completely; Blazor never re-renders
         inside it after first mount.
+      - Renders a left-rail palette of draggable items: Start + three
+        terminals (fixed, no catalog ref) and one entry per active
+        block_catalog row (Process / Decision blocks). The palette is
+        hidden when the version isn't Draft.
+      - On drop, the JS module calls back into Blazor (OnPaletteDropAsync)
+        which creates a workflow_nodes row via the existing repo, then
+        re-mounts the canvas with the updated graph.
       - Provides a temporary test affordance: a table listing the
         workflow's nodes (id / type / level / paths). Slated for removal
         at end of Phase 5 once the canvas is enough on its own.
 
-    No editing UI yet — that's Chunks 6-10. The canvas is render-only
-    in Chunk 5: no drag, no zoom, no click handlers.
+    No edge-drawing or node editing yet — that's Chunks 7-10. The
+    canvas itself is still read-only in Chunk 6 (the palette is the
+    only write path).
 *@
 
 @page "/admin/request-types/{TypeId:int}/workflows/{WorkflowId:int}/designer"
@@ -32,6 +40,7 @@
 @inject IRequestTypeVersionRepository VersionRepository
 @inject IWorkflowDefinitionRepository WorkflowRepository
 @inject IWorkflowNodeRepository NodeRepository
+@inject IBlockCatalogRepository BlockRepository
 @inject NavigationManager Navigation
 @inject ISnackbar Snackbar
 @inject IJSRuntime JS
@@ -77,19 +86,93 @@ else
         </MudAlert>
     }
 
-    <MudPaper Class="pa-3 mb-4" Elevation="1">
-        @* Canvas div: the workflow-designer JS module owns this after first
-           mount. Blazor must not re-render inside it. The min-height
-           ensures the layout doesn't collapse if the graph is empty;
-           the dashed border is a visual cue for empty / pre-mount state. *@
-        <MudText Typo="Typo.subtitle2" Class="mb-2 mud-text-secondary">
-            Canvas
-        </MudText>
-        <div id="workflow-canvas"
-             @key="_workflow.Id"
-             style="width: 100%; min-height: 360px; border: 1px dashed var(--mud-palette-divider); border-radius: 4px; overflow: auto;">
-        </div>
-    </MudPaper>
+    <MudGrid Spacing="3" Class="mb-4">
+        @if (IsDraft)
+        {
+            @* Palette rail. Hidden when the version is read-only — the user
+               can't drop anything anyway, so the affordance would be a lie. *@
+            <MudItem xs="12" md="3">
+                <MudPaper Class="pa-3" Elevation="1">
+                    <MudText Typo="Typo.subtitle2" Class="mb-2 mud-text-secondary">
+                        Palette
+                    </MudText>
+                    @* Fixed entries: every workflow has access to Start and the
+                       three terminals plus the generic Decision shape. Block-
+                       less node types — they don't reference block_catalog. *@
+                    <MudText Typo="Typo.caption" Class="mb-1 mud-text-secondary">
+                        Control flow
+                    </MudText>
+                    @foreach (var fixedItem in FixedPaletteItems)
+                    {
+                        @* Plain div not MudPaper: passes ondragstart through
+                           reliably without depending on MudBlazor attribute-
+                           splat behavior (see scoped CSS for the styling). *@
+                        <div class="palette-item pa-2 mb-1 mud-paper mud-paper-outlined"
+                             draggable="true"
+                             ondragstart="@DragStartScript(fixedItem.NodeTypeId, null)">
+                            <MudStack Row="true" AlignItems="AlignItems.Center" Spacing="2">
+                                <div style="width: 14px; height: 14px; border-radius: 3px;
+                                            background-color: @fixedItem.Color;
+                                            border: 1px solid rgba(0,0,0,0.15);"></div>
+                                <MudText Typo="Typo.body2">@fixedItem.Label</MudText>
+                            </MudStack>
+                        </div>
+                    }
+
+                    @* Dynamic entries: one row per active block_catalog. Grouped
+                       by node type so Process and Decision blocks cluster
+                       together. Empty section if no catalog rows yet — surface
+                       the seed hint so first-time users aren't lost. *@
+                    @if (_blocks.Count == 0)
+                    {
+                        <MudText Typo="Typo.caption" Class="mt-3 mud-text-disabled">
+                            No blocks in the catalog yet. Seed
+                            <code>dbo.block_catalog</code> to populate this section.
+                        </MudText>
+                    }
+                    else
+                    {
+                        foreach (var group in _blocks.GroupBy(b => b.NodeTypeId))
+                        {
+                            <MudText Typo="Typo.caption" Class="mt-3 mb-1 mud-text-secondary">
+                                @NodeTypeLabel(group.Key) blocks
+                            </MudText>
+                            @foreach (var block in group)
+                            {
+                                <div class="palette-item pa-2 mb-1 mud-paper mud-paper-outlined"
+                                     draggable="true"
+                                     ondragstart="@DragStartScript(block.NodeTypeId, block.Id)">
+                                    <MudStack Row="true" AlignItems="AlignItems.Center" Spacing="2">
+                                        <div style="width: 14px; height: 14px; border-radius: 3px;
+                                                    background-color: @(block.Color ?? DefaultColorFor(block.NodeTypeId));
+                                                    border: 1px solid rgba(0,0,0,0.15);"></div>
+                                        <MudText Typo="Typo.body2">@block.Description</MudText>
+                                    </MudStack>
+                                </div>
+                            }
+                        }
+                    }
+                </MudPaper>
+            </MudItem>
+        }
+
+        <MudItem xs="12" md="@(IsDraft ? 9 : 12)">
+            <MudPaper Class="pa-3" Elevation="1">
+                @* Canvas div: the workflow-designer JS module owns this
+                   after first mount. Blazor must not re-render inside it.
+                   The dashed border is a visual cue for empty / pre-mount
+                   state and gets recolored by the JS module's
+                   .workflow-canvas--drop-target class during dragover. *@
+                <MudText Typo="Typo.subtitle2" Class="mb-2 mud-text-secondary">
+                    Canvas
+                </MudText>
+                <div id="workflow-canvas"
+                     @key="_workflow.Id"
+                     style="width: 100%; min-height: 360px; border: 1px dashed var(--mud-palette-divider); border-radius: 4px; overflow: auto;">
+                </div>
+            </MudPaper>
+        </MudItem>
+    </MudGrid>
 
     @* --- TEMPORARY: node-list test affordance ----------------------------
        Provides a textual readout of the workflow's nodes so we can
@@ -199,6 +282,7 @@ else
     private RequestTypeVersion? _version;
     private WorkflowDefinition? _workflow;
     private IReadOnlyList<WorkflowNode> _nodes = Array.Empty<WorkflowNode>();
+    private IReadOnlyList<BlockCatalog> _blocks = Array.Empty<BlockCatalog>();
     private List<BreadcrumbItem> _breadcrumbs = new();
 
     private bool _loading = true;
@@ -207,8 +291,11 @@ else
     // JS interop state. The module reference is resolved on first render
     // (after the canvas div exists in the DOM) and kept for the lifetime
     // of the page so a future "Refresh" affordance — Chunks 6+ — can
-    // re-mount without reimporting.
+    // re-mount without reimporting. _dotNetRef is the JS-callable handle
+    // for OnPaletteDropAsync; it's also long-lived and disposed alongside
+    // the module.
     private IJSObjectReference? _module;
+    private DotNetObjectReference<WorkflowDesigner>? _dotNetRef;
     private bool _mounted;
     private const string CanvasSelector = "#workflow-canvas";
 
@@ -275,6 +362,12 @@ else
 
             _nodes = await NodeRepository.ListByWorkflowIdAsync(WorkflowId);
 
+            // Block catalog drives the palette. Loading it here keeps all
+            // page state hydrated before the first render, so the palette
+            // doesn't flicker into existence after the canvas. The catalog
+            // is small (a handful of rows even at production scale).
+            _blocks = await BlockRepository.ListActiveAsync();
+
             _breadcrumbs = new()
             {
                 new BreadcrumbItem("Request Types", href: "/admin/request-types"),
@@ -320,8 +413,17 @@ else
             _module ??= await JS.InvokeAsync<IJSObjectReference>(
                 "import", "./js/workflow-designer.js");
 
+            // Only allocate the .NET callback when the workflow is
+            // editable. Read-only views don't need drop support, and not
+            // passing the ref keeps the JS module from wiring up listeners
+            // it would never use (see attachDropListeners' guard).
+            if (IsDraft && _dotNetRef is null)
+            {
+                _dotNetRef = DotNetObjectReference.Create(this);
+            }
+
             var payload = BuildGraphPayload();
-            await _module.InvokeVoidAsync("mount", CanvasSelector, payload);
+            await _module.InvokeVoidAsync("mount", CanvasSelector, payload, _dotNetRef);
             _mounted = true;
         }
         catch (JSDisconnectedException)
@@ -389,6 +491,152 @@ else
                     "Error disposing workflow-designer JS module for workflow={WorkflowId}.",
                     WorkflowId);
             }
+        }
+
+        // Dispose the .NET callback reference whether or not the JS side
+        // managed to clean up. Holding it would leak the page across
+        // GC cycles since the JS side ostensibly still has a reference.
+        _dotNetRef?.Dispose();
+        _dotNetRef = null;
+    }
+
+    /// <summary>
+    /// Fixed palette entries — the four node types that don't carry a
+    /// <c>block_catalog</c> reference. Per the schema CHECK:
+    /// Process (2) and Decision (3) require a block_catalog_id; Start (1)
+    /// and the three terminals (Approved 4, Rejected 5, Cancelled 6)
+    /// forbid one. So Decision is intentionally NOT here — it shows up
+    /// in the catalog-driven section once IT seeds a Decision block.
+    /// </summary>
+    private static readonly FixedPaletteItem[] FixedPaletteItems = new[]
+    {
+        new FixedPaletteItem(WorkflowNodeTypeIds.Start,     "Start",     "#4caf50"),
+        new FixedPaletteItem(WorkflowNodeTypeIds.Approved,  "Approved",  "#43a047"),
+        new FixedPaletteItem(WorkflowNodeTypeIds.Rejected,  "Rejected",  "#e53935"),
+        new FixedPaletteItem(WorkflowNodeTypeIds.Cancelled, "Cancelled", "#757575"),
+    };
+
+    private readonly record struct FixedPaletteItem(int NodeTypeId, string Label, string Color);
+
+    /// <summary>
+    /// Renders an inline JS expression that puts the palette payload into
+    /// the drag's dataTransfer. We can't use Blazor's @ondragstart for
+    /// this — DragEventArgs.DataTransfer is read-only on the server side,
+    /// so any setData() call has to happen in browser JS during the actual
+    /// dragstart event. This emits a string that becomes the value of the
+    /// element's <c>ondragstart</c> attribute.
+    /// </summary>
+    private static string DragStartScript(int nodeTypeId, int? blockCatalogId)
+    {
+        var blockJson = blockCatalogId.HasValue
+            ? blockCatalogId.Value.ToString(System.Globalization.CultureInfo.InvariantCulture)
+            : "null";
+        // Single-quoted string literal in the attribute. The dataTransfer
+        // payload is JSON the JS module's drop handler will parse with
+        // JSON.parse. Set effectAllowed=copy so the dragover handler's
+        // dropEffect=copy is honored (otherwise some browsers veto the
+        // drop with a default 'none').
+        return
+            $"event.dataTransfer.setData('application/json', '{{\"nodeTypeId\":{nodeTypeId},\"blockCatalogId\":{blockJson}}}'); " +
+            "event.dataTransfer.effectAllowed = 'copy';";
+    }
+
+    private static string DefaultColorFor(int nodeTypeId) => nodeTypeId switch
+    {
+        WorkflowNodeTypeIds.Process => "#1976d2",
+        WorkflowNodeTypeIds.Decision => "#ffa726",
+        _ => "#9e9e9e",
+    };
+
+    /// <summary>
+    /// Called by the JS module when a palette item is dropped on the
+    /// canvas. Creates a new <c>workflow_nodes</c> row via the existing
+    /// repository — CreateAsync inserts at execution_level=0 with both
+    /// path FKs null, which is exactly the "orphan node" posture the
+    /// designer wants. The user wires the node up by drawing edges in
+    /// later chunks.
+    /// </summary>
+    /// <remarks>
+    /// This method is invoked from JS via the DotNetObjectReference
+    /// handed to <c>mount</c>. After a successful create we reload the
+    /// node list and re-call the JS module's <c>mount</c> with the new
+    /// graph, which tears down and redraws the SVG. For our scale (≤ 10
+    /// nodes per workflow) this is cheap enough; incremental updates
+    /// can come if profiling ever shows it matters.
+    /// </remarks>
+    [JSInvokable]
+    public async Task OnPaletteDropAsync(int nodeTypeId, int? blockCatalogId)
+    {
+        if (_workflow is null)
+        {
+            // The page is in a bad state — shouldn't be possible since the
+            // module isn't mounted before _workflow loads, but defend
+            // against late drops anyway.
+            return;
+        }
+
+        // The repo's CreateAsync takes a WorkflowNode seed. It forces
+        // execution_level=0 and both path FKs to null inside the INSERT
+        // (per Chunk 3's contract — "orphan node" posture), so we don't
+        // populate them here. All the other optional fields stay null
+        // for a freshly-dropped palette item; the node-property editor
+        // (Chunk 8) will fill them in.
+        var seed = new WorkflowNode
+        {
+            WorkflowDefinitionId = _workflow.Id,
+            NodeTypeId = nodeTypeId,
+            BlockCatalogId = blockCatalogId,
+        };
+
+        var result = await NodeRepository.CreateAsync(seed);
+
+        switch (result.Outcome)
+        {
+            case CreateNodeOutcome.Created:
+                // Reload the node list and ask the JS module to redraw.
+                _nodes = await NodeRepository.ListByWorkflowIdAsync(WorkflowId);
+                if (_module is not null)
+                {
+                    try
+                    {
+                        await _module.InvokeVoidAsync(
+                            "mount", CanvasSelector, BuildGraphPayload(), _dotNetRef);
+                    }
+                    catch (JSDisconnectedException)
+                    {
+                        // User navigated away mid-create. Nothing to do.
+                    }
+                }
+                StateHasChanged(); // Refresh the readout table below the canvas.
+                Snackbar.Add($"Added {NodeTypeLabel(nodeTypeId)} node.", Severity.Success);
+                break;
+
+            case CreateNodeOutcome.RejectedWorkflowNotFound:
+                Snackbar.Add("Workflow no longer exists.", Severity.Error);
+                break;
+
+            case CreateNodeOutcome.RejectedNotDraft:
+                Snackbar.Add(
+                    "Version is no longer Draft. Reload the page.",
+                    Severity.Warning);
+                break;
+
+            case CreateNodeOutcome.RejectedInvalidShape:
+                // The CHECK on workflow_nodes pairs node_type with
+                // block_catalog presence. Mismatches reach here when:
+                //   - a Process or Decision palette item is dropped but
+                //     its blockCatalogId vanished between drag and drop
+                //     (race with IT deactivating a block);
+                //   - or a malformed dataTransfer payload arrives.
+                // Either way the palette wiring is the bug, not the user.
+                Snackbar.Add(
+                    "Could not add node: invalid type/block combination.",
+                    Severity.Warning);
+                break;
+
+            default:
+                Snackbar.Add("Could not add node.", Severity.Error);
+                break;
         }
     }
 

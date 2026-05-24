@@ -4,17 +4,17 @@
 
 ## Where we are
 
-**Phase 5 in progress.** Chunks 1-5 done. The designer route
+**Phase 5 in progress.** Chunks 1-6 done. The designer route
 (`/admin/request-types/{typeId}/workflows/{workflowId}/designer`)
-now renders the workflow graph as an SVG via D3 inside the canvas
-div. D3 v7.9.0 is vendored locally at `wwwroot/lib/d3.v7.min.js`
-(CDN was rejected — sandbox couldn't reach jsdelivr, and an
-internal corporate env might be firewall-restricted too). The
-designer is read-only: shapes per node type (oval / rectangle /
-diamond), edges drawn via `d3.linkVertical()` from path1/path2
-FKs, layout = even-spread per `execution_level` row. No drag,
-no zoom, no click handlers. Next: Chunk 6 (palette + drag-to-add
-nodes, the first write path from the designer).
+now has a left-rail palette: Start + three terminals as fixed
+entries, one entry per active `block_catalog` row beneath. Drag
+a palette item onto the canvas → the JS module fires a
+`DotNetObjectReference` callback → `OnPaletteDropAsync` runs
+`WorkflowNodeRepository.CreateAsync` with an orphan-node seed
+(level=0, no path FKs) → re-mount with the new graph. First
+end-to-end write path from the designer. Palette is hidden when
+the version is read-only. Next: Chunk 7 (edge drawing — wire
+path1/path2 via UI).
 
 Phase 5 design settled before code:
   - **D3.js** for the SVG canvas. No React, no build pipeline,
@@ -36,17 +36,17 @@ Phase 5 design settled before code:
 
 Read these to get oriented:
 - `docs/PLAN.md` — the phase/chunk roadmap. **Next step is Phase 5
-  / Chunk 6 — palette + drag-to-add nodes.** PLAN's provisional
-  Phase 5 chunk list was superseded by the design conversation
-  (see Where We Are above); the locked-in plan lives in the
-  previous chat transcript and on the commit log.
+  / Chunk 7 — edge drawing (wire path1/path2 via UI).** PLAN's
+  provisional Phase 5 chunk list was superseded by the design
+  conversation; the locked-in plan lives in the previous chat
+  transcript and on the commit log.
 - `docs/data-model.sql` — the reviewed schema.
 - `docs/CONCEPT.md` — design intent. §3.3 covers Settings, User Groups,
   Users, Required Documents, and the Request Type editor in detail;
   §3.1 and §3.2 still scheduled for refresh in Phase 6 / Phase 9.
 - `BUILD.md` — how to build/run locally. "What's currently built
   (Phases 1-4)" summarises the shipped surface.
-- `LessonsLearned.md` — twelve entries.
+- `LessonsLearned.md` — fourteen entries.
 - `docs/REMOVE-BEFORE-PROD.md` — debug identity shim cutover checklist.
 
 ## Approach rules (locked in during design)
@@ -134,35 +134,45 @@ and `dotnet test`, reports back.
 
 ## Suggested next session
 
-**Phase 5 / Chunk 6 — Palette + drag-to-add nodes.**
+**Phase 5 / Chunk 7 — Edge drawing (wire path1/path2 via UI).**
 
-First write path from the designer. Adds a left rail with
-draggable items:
-  - Fixed entries: Start, Decision, Approved, Rejected, Cancelled
-    (one per node type that doesn't need a block).
-  - Dynamic entries: one Process item per active `block_catalog`
-    row, grouped by Process (and eventually Decision if a Decision
-    block ever needs config).
+Second write path from the designer. Goal: drag from one node's
+output handle to another node's input handle to set `path1_node_id`
+(or `path2_node_id` for Decisions).
 
-Dragging an entry onto the canvas:
-  - JS module handles the drag (D3 has built-in drag support).
-  - On drop, JS calls back into Blazor via a `DotNetObjectReference`
-    instance attached during mount(). The Blazor method calls
-    `IWorkflowNodeRepository.CreateAsync` from Chunk 3.
-  - CreateAsync inserts at level=0 with null path FKs (the engine
-    treats unwired nodes as orphans — see Chunk 3 result enums).
-  - On success, refresh `_nodes` via `ListByWorkflowIdAsync` and
-    call `module.mount(...)` again to re-render.
+Scope:
+  - JS module: add small output handles to each non-terminal node
+    (one for Start/Process, two for Decision — visibly distinct so
+    the user knows which is path1 vs path2). Terminal nodes get no
+    output handles (they have no out-edges).
+  - HTML5 drag from a handle to a node target. The dataTransfer
+    payload carries `{sourceNodeId, slot}` where slot ∈
+    {"path1","path2"}. On drop on a node body, the JS module calls
+    a new `[JSInvokable] OnEdgeDropAsync(sourceId, targetId, slot)`.
+  - Blazor: route to `IWorkflowNodeRepository.SetPath1Async` or
+    `SetPath2Async` from Chunk 3 — which already handles renumbering
+    via the recursive CTE. On success, reload + re-mount.
+  - Result-enum handling: most cases are silent success, but the
+    no-merging rule (target already has an incoming edge from
+    another parent) needs a clear Snackbar message; same for
+    self-loop attempts and same-version invariant violations
+    if those can fire here.
 
-Why this is non-trivial:
-  - First JS→Blazor callback (Chunk 5 was Blazor→JS only).
-  - First write path from the designer end-to-end:
-    drag → drop → JS callback → Blazor method → repo → DB → reload → re-render.
-  - The `DotNetObjectReference` lifecycle needs care — must be
-    disposed when the page navigates away, or it leaks.
-  - The block_catalog table doesn't exist yet in the data model.
-    Chunk 6 might need to seed a `block_catalog` table first
-    (probably manually on dev DB per the design conversation;
-    NOT in the repo per Q7 — block/artifact catalog is dev-seeded).
+Likely catches:
+  - The JS module's render needs invalidation so handles re-attach
+    after a re-mount. Currently mount() rebuilds the SVG from scratch,
+    so handles get re-created — good.
+  - Drag from a handle reaches both the canvas's `drop` listener
+    and the target node's listener. Pick one: probably the canvas's,
+    since the JS module is the one that knows which node was under
+    the cursor (via event.target / `closest()`). The palette drop
+    listener stays — it distinguishes palette vs edge drags by
+    inspecting `dataTransfer.types`.
+
+No new repo work (Chunk 3 already shipped the wiring methods).
+The new tests, if any, live alongside the JS module — but per the
+established pattern, JS interop is exercised manually on the dev
+machine, not unit-tested. The repository tests already cover all
+the renumber cases.
 
 PAT note: each session, user provides a short-lived PAT for the repo.

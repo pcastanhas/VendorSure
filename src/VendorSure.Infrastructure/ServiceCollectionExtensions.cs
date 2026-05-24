@@ -41,6 +41,7 @@ public static class ServiceCollectionExtensions
         services.AddScoped<IRequestTypeValidationDocumentRepository, RequestTypeValidationDocumentRepository>();
         services.AddScoped<IWorkflowDefinitionRepository, WorkflowDefinitionRepository>();
         services.AddScoped<IWorkflowNodeRepository, WorkflowNodeRepository>();
+        services.AddScoped<IBlockCatalogRepository, BlockCatalogRepository>();
         services.AddScoped<ISettingsRepository, SettingsRepository>();
 
         return services;

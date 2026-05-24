@@ -479,3 +479,72 @@ quietly in both the mount path and the disposal path — there's
 nothing meaningful to clean up because the browser already disposed
 the document. The Logger call would otherwise generate noise on
 every successful page-away.
+
+## 2026-05-24 — HTML5 drag-and-drop in Blazor: setData() needs raw JS, MudPaper isn't reliable for drag sources
+
+Phase 5 / Chunk 6. Adding the palette → canvas drag to create
+nodes. The first JS→Blazor callback in the codebase. Several
+gotchas:
+
+**Blazor's `DragEventArgs.DataTransfer` is read-only.** The C#
+type exposes `Types`, `DropEffect`, `EffectAllowed`, etc., but
+no `SetData()` method. So `@ondragstart="..."` can't put a
+payload onto the drag — it can only react to the event after
+the browser already created it. The dataTransfer object Blazor
+hands you is a server-side projection of the browser's, captured
+at the moment the event fired. Mutating it would have nowhere to
+land.
+
+The workaround is to use raw HTML `ondragstart` (no `@`), which
+is an inline-JS attribute the browser executes natively during
+the actual dragstart event. The C# code computes the payload
+string and emits it into the markup:
+
+```razor
+<div draggable="true"
+     ondragstart="@DragStartScript(nodeTypeId, blockCatalogId)">
+```
+
+Where `DragStartScript` returns a fragment of JS that calls
+`event.dataTransfer.setData('application/json', '...')`. The
+drop side stays pure JS too (the workflow-designer module's
+drop listener calls `event.dataTransfer.getData(...)`), so the
+whole drag-data channel is native — Blazor only sees the result
+after the drop, via a `DotNetObjectReference.invokeMethodAsync`
+call from JS.
+
+**Side note about Blazor's `@ondrop`.** Even when you give up on
+`@ondragstart`, `@ondrop`'s `DragEventArgs.DataTransfer` is
+reportedly often empty (dotnet/aspnetcore#43976). The reliable
+path is JS on both sides of the drag, with Blazor only entering
+the picture via a `[JSInvokable]` method after the drop completes.
+
+**MudPaper isn't reliable for drag sources.** MudBlazor has
+known issues with attribute splatting (issues #1843, #5437,
+#7796) — `UserAttributes` and inline HTML attributes don't
+always propagate to the rendered element. For a drag source, we
+need `draggable="true"` AND `ondragstart="..."` to land verbatim
+on the rendered `<div>`, and the safest way is to write a plain
+`<div>` directly. We can still use MudBlazor styling classes
+(`mud-paper`, `mud-paper-outlined`, `pa-2`, etc.) on the div —
+no need to wrap it in `<MudPaper>`. Less coupling to MudBlazor
+quirks, identical visual result.
+
+**`DotNetObjectReference` lifecycle.** Page-scoped: create lazily
+in `OnAfterRenderAsync` when the mount needs it; dispose in
+`DisposeAsync`. Failing to dispose leaks the reference (JS retains
+a handle to the Blazor circuit's view of the component, preventing
+GC of the page's state).
+
+Two refinements worth holding onto:
+- Allocate the dotnet ref **only when there's a write path**. We
+  skip it when the version is read-only, and the JS module's
+  attach-listeners guard (`if (!entry.listenersAttached &&
+  entry.dotNetRef)`) honors that — no drop listeners, no wasted
+  ref.
+- Pass the ref on every `mount()` call. The JS module updates
+  its per-canvas state but only attaches listeners once
+  (idempotent — `entry.listenersAttached` flag). Re-mounts after
+  a successful create still work because the listeners persist
+  across `innerHTML = ""` (which clears children but not
+  listeners on the container itself).

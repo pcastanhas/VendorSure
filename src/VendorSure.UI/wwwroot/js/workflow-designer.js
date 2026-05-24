@@ -53,7 +53,7 @@ const NODE_LABEL = {
     [NODE_TYPE.Cancelled]: "Cancelled",
 };
 
-export async function mount(selector, graphData) {
+export async function mount(selector, graphData, dotNetRef) {
     if (typeof window === "undefined" || !window.d3) {
         console.error("workflow-designer: window.d3 is not loaded. " +
             "Make sure lib/d3.v7.min.js is included in App.razor.");
@@ -69,8 +69,26 @@ export async function mount(selector, graphData) {
 
     // Wipe any prior contents — defensive. The canvas div was empty on
     // first mount per the page shell, but we may be re-mounting after a
-    // hot reload in dev.
+    // node create / edit (Chunk 6+) where the same container is reused.
+    // innerHTML = "" removes the SVG children but leaves the container's
+    // own event listeners (dragover / drop) intact, so we don't re-attach.
     container.innerHTML = "";
+
+    // Per-canvas state. If this is a re-mount we update the existing
+    // entry; on first mount we wire up the drop-zone listeners. The
+    // listeners themselves stay attached for the page's lifetime —
+    // dispose() removes them.
+    let entry = state.get(selector);
+    if (!entry) {
+        entry = { listenersAttached: false };
+        state.set(selector, entry);
+    }
+    entry.dotNetRef = dotNetRef || entry.dotNetRef || null;
+
+    if (!entry.listenersAttached && entry.dotNetRef) {
+        attachDropListeners(container, selector);
+        entry.listenersAttached = true;
+    }
 
     const { nodes = [], edges = [] } = graphData || {};
 
@@ -171,19 +189,118 @@ export async function mount(selector, graphData) {
             .text(`#${d.id}`);
     });
 
-    state.set(selector, { svg, nodeCount: positioned.length });
+    // Update state with the latest SVG handle but preserve the listener
+    // wiring. dispose() needs the listener handles to detach cleanly.
+    entry.svg = svg;
+    entry.nodeCount = positioned.length;
 }
 
 export async function dispose(selector) {
     const s = state.get(selector);
     if (s) {
-        s.svg.remove();
+        // Detach the drag/drop listeners we attached on first mount. We
+        // can rely on the saved handles existing only when
+        // listenersAttached was true; the helper checks defensively.
+        const container = document.querySelector(selector);
+        if (container && s.detach) {
+            s.detach();
+        }
+        if (s.svg) {
+            s.svg.remove();
+        }
         state.delete(selector);
     }
     const container = document.querySelector(selector);
     if (container) {
         container.innerHTML = "";
     }
+}
+
+// Attach drag/drop listeners to the canvas container. Called exactly
+// once per canvas (gated by entry.listenersAttached in mount). The
+// listeners stay alive across re-mounts because innerHTML clearing
+// removes children, not listeners on the container itself.
+//
+// The dataTransfer payload is a JSON-serialized
+// { nodeTypeId: number, blockCatalogId: number | null } object, set by
+// the palette buttons' dragstart handler in Razor markup. Decoding here
+// keeps the JS side dumb about which palette items exist — they're
+// described by the C# code that renders them.
+function attachDropListeners(container, selector) {
+    const onDragOver = (event) => {
+        // preventDefault is required by the HTML5 spec to mark this
+        // element as a valid drop target. Without it, drop never fires.
+        event.preventDefault();
+        event.dataTransfer.dropEffect = "copy";
+        container.classList.add("workflow-canvas--drop-target");
+    };
+
+    const onDragLeave = (event) => {
+        // dragleave fires for child elements too; only remove the
+        // highlight when we actually leave the container's bounding box.
+        if (event.target === container) {
+            container.classList.remove("workflow-canvas--drop-target");
+        }
+    };
+
+    const onDrop = async (event) => {
+        event.preventDefault();
+        container.classList.remove("workflow-canvas--drop-target");
+
+        const entry = state.get(selector);
+        if (!entry || !entry.dotNetRef) {
+            console.warn("workflow-designer: drop arrived with no Blazor callback.");
+            return;
+        }
+
+        const raw = event.dataTransfer.getData("application/json");
+        if (!raw) {
+            // Not a palette drag — maybe a stray drop from the desktop.
+            // Ignore quietly.
+            return;
+        }
+
+        let payload;
+        try {
+            payload = JSON.parse(raw);
+        } catch (err) {
+            console.warn("workflow-designer: drop payload was not valid JSON.", err);
+            return;
+        }
+
+        const nodeTypeId = Number(payload.nodeTypeId);
+        const blockCatalogId = payload.blockCatalogId == null
+            ? null
+            : Number(payload.blockCatalogId);
+
+        if (!Number.isFinite(nodeTypeId)) {
+            console.warn("workflow-designer: drop payload missing nodeTypeId.", payload);
+            return;
+        }
+
+        try {
+            await entry.dotNetRef.invokeMethodAsync(
+                "OnPaletteDropAsync", nodeTypeId, blockCatalogId);
+        } catch (err) {
+            // The Blazor side logs its own errors; the catch here is just
+            // to prevent the unhandled-promise warning in the browser.
+            console.warn("workflow-designer: Blazor drop callback failed.", err);
+        }
+    };
+
+    container.addEventListener("dragover", onDragOver);
+    container.addEventListener("dragleave", onDragLeave);
+    container.addEventListener("drop", onDrop);
+
+    // Save a single detacher so dispose() can clean up without needing
+    // to know the individual handler references.
+    const entry = state.get(selector);
+    entry.detach = () => {
+        container.removeEventListener("dragover", onDragOver);
+        container.removeEventListener("dragleave", onDragLeave);
+        container.removeEventListener("drop", onDrop);
+        container.classList.remove("workflow-canvas--drop-target");
+    };
 }
 
 // --- internals ------------------------------------------------------------
