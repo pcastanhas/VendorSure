@@ -1064,6 +1064,58 @@ public sealed class WorkflowNodeRepositoryTests
     }
 
     [Fact]
+    public async Task DeleteSubtreeAsync_does_not_orphan_descendants_when_root_is_Decision()
+    {
+        // Regression test for the bug where DeleteSubtreeAsync left
+        // descendants behind as orphans when the deleted subtree's root
+        // was a Decision (or any node whose path FKs the algorithm's
+        // intermediate steps had to null before the final DELETE).
+        //
+        // The bug: the original implementation ran two ExecuteAsync calls
+        // with the same recursive CTE — one to null intra-subtree FKs,
+        // one to DELETE. The first call nulled #root.path1 and
+        // #root.path2, so the second CTE's walk found only the root
+        // (path FKs were already null) and DELETE removed just one row.
+        // Descendants survived as orphans.
+        //
+        // The fix: materialize subtree IDs into a table variable in one
+        // batch before any mutation, then reference the table variable
+        // for both the null-FKs UPDATE and the DELETE. This test exists
+        // primarily to keep the fix in place — the existing
+        // DeleteSubtreeAsync_removes_Decision_and_both_branches above
+        // is structurally identical and would also catch a regression.
+        await using var f = await SetupAsync();
+        var start = (await _nodes.CreateAsync(StartNode(f.WorkflowId))).Id!.Value;
+        await _nodes.SetStartNodeAsync(f.WorkflowId, start);
+        var process = (await _nodes.InsertChildAsync(new InsertChildRequest(
+            start, 1, WorkflowNodeTypeIds.Process, f.BlockId))).Id!.Value;
+        var decision = (await _nodes.InsertChildAsync(new InsertChildRequest(
+            process, 1, WorkflowNodeTypeIds.Decision, f.BlockId))).Id!.Value;
+        var approved = (await _nodes.InsertChildAsync(new InsertChildRequest(
+            decision, 1, WorkflowNodeTypeIds.Approved, null))).Id!.Value;
+        var rejected = (await _nodes.InsertChildAsync(new InsertChildRequest(
+            decision, 2, WorkflowNodeTypeIds.Rejected, null))).Id!.Value;
+
+        // Sanity check: before delete, all rows exist and Decision is
+        // properly wired to both terminals.
+        var decisionBefore = await _nodes.GetByIdAsync(decision);
+        Assert.Equal(approved, decisionBefore!.Path1NodeId);
+        Assert.Equal(rejected, decisionBefore.Path2NodeId);
+
+        var result = await _nodes.DeleteSubtreeAsync(decision);
+        Assert.Equal(DeleteSubtreeOutcome.Deleted, result.Outcome);
+        Assert.Equal(2, result.DescendantsDeleted);
+
+        // All three rows gone — the bug surfaced as #27/#28 surviving.
+        Assert.Null(await _nodes.GetByIdAsync(decision));
+        Assert.Null(await _nodes.GetByIdAsync(approved));
+        Assert.Null(await _nodes.GetByIdAsync(rejected));
+
+        // Upstream parent's path1 is nulled.
+        Assert.Null((await _nodes.GetByIdAsync(process))!.Path1NodeId);
+    }
+
+    [Fact]
     public async Task DeleteSubtreeAsync_rejects_when_version_not_Draft()
     {
         await using var f = await SetupAsync();

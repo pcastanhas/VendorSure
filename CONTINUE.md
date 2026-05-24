@@ -50,8 +50,20 @@ construction model; Chunk 9 added the matching deletion surface:
     Start delete is blocked — the X button isn't even rendered
     on Start.
 
-Test surface: 158 → 193 (+1 workflow def repo, +19 node repo
-Chunk 7, +15 node repo Chunk 9).
+Test surface: 158 → 194 (+1 workflow def repo, +19 node repo
+Chunk 7, +15 node repo Chunk 9, +1 regression test for the
+two-batch-CTE bug fix below).
+
+  - **Chunk 9 bug fix**: `DeleteSubtreeAsync` had a data-loss
+    bug — deleting a Decision left its children behind as
+    orphans. Root cause: the original implementation ran two
+    separate `ExecuteAsync` calls with the same recursive CTE
+    (one to null intra-subtree FKs, one to DELETE). The first
+    statement nulled the FKs the second's CTE walk depended on,
+    so the second walk found only the seed and deleted only one
+    row. Fix: materialize subtree IDs into a `@ids` table
+    variable in one batch up front, then reference it for both
+    operations. See LessonsLearned entry 20.
 
 Phase 5 design settled before code (post-Chunk-7 shift):
   - **D3.js** for the SVG canvas. No React, no build pipeline,
@@ -93,7 +105,7 @@ Read these to get oriented:
   §3.1 and §3.2 still scheduled for refresh in Phase 6 / Phase 9.
 - `BUILD.md` — how to build/run locally. "What's currently built
   (Phases 1-4)" summarises the shipped surface.
-- `LessonsLearned.md` — nineteen entries.
+- `LessonsLearned.md` — twenty entries.
 - `docs/REMOVE-BEFORE-PROD.md` — debug identity shim cutover checklist.
 
 ## Approach rules (locked in during design)

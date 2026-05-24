@@ -884,3 +884,125 @@ case logs a noisy unhandled exception.
 Future delete-related operations (e.g. a "clear workflow" wipe
 or a future "reset to template") slot into this same helper.
 
+
+## 2026-05-24 — Two SQL batches sharing a recursive CTE can destroy each other's data
+
+Phase 5 / Chunk 9 bug fix. `DeleteSubtreeAsync` had a subtle
+data-loss bug: deleting a Decision (or any node whose path FKs
+the algorithm had to mutate) left descendants behind as
+unreachable orphans.
+
+The pattern that fails:
+
+```csharp
+// First ExecuteAsync — null intra-subtree FKs so the DELETE
+// doesn't violate FK_workflow_nodes_path1/path2.
+await ExecuteAsync(@"
+    ;WITH subtree AS (
+        SELECT id, path1_node_id, path2_node_id
+        FROM workflow_nodes WHERE id = @rootId
+        UNION ALL
+        SELECT n.id, n.path1_node_id, n.path2_node_id
+        FROM workflow_nodes n
+        INNER JOIN subtree s
+            ON n.id = s.path1_node_id OR n.id = s.path2_node_id
+    )
+    UPDATE n SET path1_node_id = NULL, path2_node_id = NULL
+    FROM workflow_nodes n INNER JOIN subtree s ON s.id = n.id;
+");
+
+// Second ExecuteAsync — re-walk same CTE and DELETE.
+await ExecuteAsync(@"
+    ;WITH subtree AS ( /* SAME CTE */ )
+    DELETE n FROM workflow_nodes n INNER JOIN subtree s ON s.id = n.id;
+");
+```
+
+**What goes wrong**: the recursive CTE walks via the parent's
+`path1_node_id` / `path2_node_id`. The first statement nulls
+those FKs for every node in the subtree. The second statement
+re-walks the CTE on a fresh batch — but the FKs are now NULL.
+The seed row matches the anchor, but the recursive member finds
+no children (its parent's path columns are NULL), so the walk
+terminates after one iteration. `subtree` = `{root}`. `DELETE`
+removes only the root. Descendants survive as orphans.
+
+This was reproducible on every Decision-with-children delete. It
+shipped through Chunk 9 because the test that should have caught
+it (`DeleteSubtreeAsync_removes_Decision_and_both_branches`) had
+the right shape but apparently wasn't actually run against the
+buggy code before commit. (Or was run in an environment where
+the bug somehow didn't manifest — but I can't construct a
+scenario where it wouldn't, so the more likely answer is the
+test was added in the same commit as the bug and never executed.)
+
+**The fix**: materialize the subtree IDs into a `@ids` table
+variable in ONE batch, BEFORE any FK mutation, then reference
+the table variable for both the UPDATE-to-null-FKs and the
+DELETE. The CTE walk happens exactly once against the
+unmodified data.
+
+```sql
+DECLARE @ids TABLE (id int PRIMARY KEY);
+
+;WITH subtree AS ( /* recursive walk */ )
+INSERT INTO @ids (id) SELECT id FROM subtree;
+
+UPDATE workflow_definitions
+SET start_node_id = NULL
+WHERE start_node_id IN (SELECT id FROM @ids);
+
+UPDATE n SET path1_node_id = NULL, path2_node_id = NULL
+FROM workflow_nodes n INNER JOIN @ids i ON i.id = n.id;
+
+DELETE n
+FROM workflow_nodes n INNER JOIN @ids i ON i.id = n.id;
+```
+
+The whole batch is one `ExecuteAsync` because table variables
+live within a single batch — across multiple `ExecuteAsync`
+calls, the `@ids` declared in one wouldn't survive to the next.
+
+**Three things this teaches:**
+
+1. **Materialize anything an upcoming mutation will invalidate.**
+   When step N writes data that step N+1's query depends on,
+   either combine them into one batch or snapshot the dependency
+   into a stable form (table variable, temp table) up front. The
+   "each step is small and simple" appeal of separate batches
+   isn't worth this class of bug.
+
+2. **Test that what you assert ran.** The Chunk 9 test asserted
+   that Approved and Rejected are deleted after deleting their
+   Decision parent. The assertion was correct. But the test
+   apparently never executed against the buggy build, so the
+   assertion never fired. There's no automated CI yet on this
+   project; the user runs `dotnet test` locally. A future-proofing
+   move would be wiring CI even at this stage so commits can't
+   pass without their tests running.
+
+3. **The Python simulation I wrote to "verify" the CTE wasn't
+   the same thing as running the CTE.** I built a Python loop
+   that walked the path FKs once and confirmed the descendants
+   were found, then concluded "the CTE is fine." But the actual
+   bug was in the INTERACTION between two CTE runs and an
+   intervening UPDATE — my simulation only had one walk. Tests
+   should exercise the actual code path, not a hand-written
+   model of it. If I'd thought to simulate the two-step sequence,
+   the bug would have been obvious immediately.
+
+This is the third time in Phase 5 I've moved an invariant from
+"enforced at edit time" to "enforced elsewhere," and the third
+time it's bitten in a slightly different way:
+  - Chunk 7: removed `CK_workflow_nodes_decision_both_edges`,
+    moved completeness to promotion gate.
+  - Chunk 7: removed orphan-detection from the schema, moved to
+    UI affordances + (eventually) promotion gate.
+  - Now: removed the implicit "each statement reads clean data"
+    assumption that two-step SQL had, by combining into one batch.
+
+The general theme: **make implicit dependencies explicit**. The
+two-step pattern relied on an implicit "data doesn't change
+between my queries" assumption that wasn't true. The fix names
+the dependency (the subtree ID list) and makes it the explicit
+input to both subsequent steps.

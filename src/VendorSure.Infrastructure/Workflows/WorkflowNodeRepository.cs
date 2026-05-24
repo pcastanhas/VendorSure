@@ -831,12 +831,23 @@ internal sealed class WorkflowNodeRepository : IWorkflowNodeRepository
                 new { nodeId, workflowId = probe.WorkflowDefinitionId },
                 transaction, cancellationToken: ct));
 
-            // 4-6. Null intra-subtree path FKs, then delete subtree rows.
-            // Both statements use the same recursive CTE definition.
-            // Doing it as two batched statements (one UPDATE, one DELETE)
-            // keeps each individually simple and lets SQL Server optimize
-            // the CTE recursion separately for each.
-            const string subtreeCte = @"
+            // Materialize the subtree IDs into a table variable BEFORE
+            // any mutation. The recursive CTE walks via path1_node_id /
+            // path2_node_id; if we let step 5 (null intra-subtree FKs)
+            // run first and step 6 re-walks the CTE, step 6 sees the
+            // now-nulled FKs and only finds the seed. The result was
+            // descendants surviving as orphans — caught during dev test
+            // with a Decision-plus-two-terminals subtree where step 5
+            // nulled #26.path1/path2 and step 6 then couldn't reach
+            // #27 and #28 anymore.
+            //
+            // The table variable @ids must be declared and populated
+            // in the same batch as the operations that read it; Dapper
+            // starts a fresh batch per ExecuteAsync, so we issue steps
+            // 4-6 as one multi-statement command inside the transaction.
+            const string deleteBatch = @"
+                DECLARE @ids TABLE (id int PRIMARY KEY);
+
                 ;WITH subtree AS (
                     SELECT id, path1_node_id, path2_node_id
                     FROM dbo.workflow_nodes WHERE id = @nodeId
@@ -845,39 +856,35 @@ internal sealed class WorkflowNodeRepository : IWorkflowNodeRepository
                     FROM dbo.workflow_nodes n
                     INNER JOIN subtree s
                         ON n.id = s.path1_node_id OR n.id = s.path2_node_id
-                )";
+                )
+                INSERT INTO @ids (id) SELECT id FROM subtree;
 
-            // 4. Defensive: if start_node_id happens to point inside the
-            // subtree (e.g. a descendant is the start — shouldn't happen
-            // because we reject Start delete above, but the schema
-            // permits arbitrary nodes being designated as start), null
-            // it before the cascade.
+                -- 4. Defensive: null workflow.start_node_id if it points
+                -- at any subtree node. Should never fire (Start delete
+                -- is rejected at the top) but the schema permits any
+                -- node as start, so we handle it.
+                UPDATE wd
+                SET start_node_id = NULL
+                FROM dbo.workflow_definitions wd
+                WHERE wd.id = @workflowId
+                  AND wd.start_node_id IN (SELECT id FROM @ids);
+
+                -- 5. Null intra-subtree FKs so the DELETE doesn't
+                -- violate FK_workflow_nodes_path1 / path2.
+                UPDATE n
+                SET path1_node_id = NULL, path2_node_id = NULL
+                FROM dbo.workflow_nodes n
+                INNER JOIN @ids i ON i.id = n.id;
+
+                -- 6. Delete the subtree.
+                DELETE n
+                FROM dbo.workflow_nodes n
+                INNER JOIN @ids i ON i.id = n.id;";
+
             await connection.ExecuteAsync(new CommandDefinition(
-                subtreeCte + @"
-                  UPDATE wd
-                  SET start_node_id = NULL
-                  FROM dbo.workflow_definitions wd
-                  WHERE wd.id = @workflowId
-                    AND wd.start_node_id IN (SELECT id FROM subtree);",
+                deleteBatch,
                 new { nodeId, workflowId = probe.WorkflowDefinitionId },
                 transaction, cancellationToken: ct));
-
-            // 5. Null intra-subtree FKs so the DELETE doesn't violate
-            // FK_workflow_nodes_path1 / path2 when removing rows.
-            await connection.ExecuteAsync(new CommandDefinition(
-                subtreeCte + @"
-                  UPDATE n
-                  SET path1_node_id = NULL, path2_node_id = NULL
-                  FROM dbo.workflow_nodes n
-                  INNER JOIN subtree s ON s.id = n.id;",
-                new { nodeId }, transaction, cancellationToken: ct));
-
-            // 6. Delete the subtree.
-            await connection.ExecuteAsync(new CommandDefinition(
-                subtreeCte + @"
-                  DELETE n FROM dbo.workflow_nodes n
-                  INNER JOIN subtree s ON s.id = n.id;",
-                new { nodeId }, transaction, cancellationToken: ct));
 
             transaction.Commit();
             return new DeleteSubtreeResult(DeleteSubtreeOutcome.Deleted, descendantsDeleted);
