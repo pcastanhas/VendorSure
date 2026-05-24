@@ -179,12 +179,41 @@ export async function mount(selector, graphData, dotNetRef) {
     // only on the SVG elements (cleared with the SVG).
     container.innerHTML = "";
 
+    // Tooltip overlay — a single absolutely-positioned div that the
+    // node-hover handlers populate and show. Styled to match MudBlazor's
+    // dark-tooltip look so it reads as part of the same UI. Lives inside
+    // the canvas container so it scrolls with the canvas content; gets
+    // wiped along with the SVG on re-mount (we recreate it below).
+    //
+    // Container needs position:relative so the tooltip's absolute
+    // positioning is canvas-local. The canvas div has overflow:auto from
+    // its inline style in the Razor; setting position here is idempotent.
+    container.style.position = "relative";
+    const tooltip = document.createElement("div");
+    tooltip.className = "workflow-canvas-tooltip";
+    Object.assign(tooltip.style, {
+        position: "absolute",
+        pointerEvents: "none",         // never block clicks on canvas
+        display: "none",                // hidden until a node is hovered
+        background: "rgba(33, 33, 33, 0.95)",  // Material grey 900 @ 95%
+        color: "#fff",
+        padding: "8px 12px",
+        borderRadius: "4px",
+        fontSize: "12px",
+        lineHeight: "1.4",
+        maxWidth: "320px",
+        boxShadow: "0 2px 8px rgba(0, 0, 0, 0.25)",
+        zIndex: "10",
+    });
+    container.appendChild(tooltip);
+
     let entry = state.get(selector);
     if (!entry) {
         entry = {};
         state.set(selector, entry);
     }
     entry.dotNetRef = dotNetRef || entry.dotNetRef || null;
+    entry.tooltip = tooltip;
 
     const { nodes = [], edges = [] } = graphData || {};
 
@@ -371,15 +400,28 @@ export async function mount(selector, graphData, dotNetRef) {
             ? { ...baseStyle, fill: d.blockColor, stroke: darken(d.blockColor, 0.7) }
             : baseStyle;
 
-        drawShape(sel, style);
+        const bodyShape = drawShape(sel, style);
 
-        // Native SVG hover tooltip — appended FIRST so browsers know to
-        // pick it up for any element inside the <g>. Only emitted when
-        // the node has a block with a description. Start, Approved,
-        // Rejected, Cancelled have no block, so no tooltip — their
-        // shape and label are self-explanatory.
-        if (d.blockDescription) {
-            sel.append("title").text(d.blockDescription);
+        // Hover tooltip — replaces the old native SVG <title> element
+        // (which was easy to miss because of the browser's ~1s reveal
+        // delay and minimal styling). The trigger area is the body
+        // shape only, so hovering the X button or the actor icon
+        // doesn't fire the tooltip (the X is outside the body; the
+        // actor icon is a separate <g> sibling of the body shape,
+        // which interrupts the body's hover when the cursor crosses
+        // into it — minor UX inconsistency, acceptable at our scale).
+        //
+        // Skipped when the node has no block (Start, Approved,
+        // Rejected, Cancelled) — those have nothing block-specific
+        // to surface beyond their shape and label.
+        if (d.blockName) {
+            bodyShape
+                .style("cursor", "default")
+                .on("mouseenter", (event) =>
+                    showTooltip(event, d, tooltip, container))
+                .on("mousemove", (event) =>
+                    positionTooltip(event, tooltip, container))
+                .on("mouseleave", () => hideTooltip(tooltip));
         }
 
         // Label and (when the node has a block with a known actor type)
@@ -776,6 +818,87 @@ function onDeleteClick(event, nodeId, dotNetRef) {
         });
 }
 
+// --- tooltip -------------------------------------------------------------
+//
+// Custom hover tooltip styled to match MudBlazor's dark-tooltip look.
+// Replaces the native SVG <title> element, which had two annoying
+// failure modes: browser-controlled ~1s reveal delay (felt sluggish)
+// and minimal native styling (easy to miss). The custom version
+// appears immediately on hover, supports multi-line content (name +
+// description), embeds the actor-type icon on the title line, and
+// follows the cursor.
+//
+// The tooltip <div> is created once per mount() in the canvas
+// container; these helpers just populate and position it.
+
+function showTooltip(event, node, tooltip, container) {
+    // Clear any prior content.
+    tooltip.innerHTML = "";
+
+    // First line: actor icon + block name (bold). Icon goes in an
+    // inline <svg> sized to match the line height; renderer functions
+    // accept any D3 selection so we can reuse the same code paths the
+    // canvas uses.
+    const titleLine = document.createElement("div");
+    titleLine.style.display = "flex";
+    titleLine.style.alignItems = "center";
+    titleLine.style.gap = "6px";
+    titleLine.style.fontWeight = "600";
+
+    if (node.actorType != null && ACTOR_ICON_RENDERER[node.actorType]) {
+        const iconSvg = document.createElementNS(
+            "http://www.w3.org/2000/svg", "svg");
+        iconSvg.setAttribute("width", "14");
+        iconSvg.setAttribute("height", "14");
+        iconSvg.setAttribute("viewBox", "0 0 16 16");
+        iconSvg.style.flexShrink = "0";
+        titleLine.appendChild(iconSvg);
+        // Use D3 to call the renderer, since renderers expect a D3
+        // selection. window.d3 is guaranteed to be loaded at this point
+        // (mount() bailed out otherwise).
+        ACTOR_ICON_RENDERER[node.actorType](window.d3.select(iconSvg), "#fff");
+    }
+
+    const nameSpan = document.createElement("span");
+    nameSpan.textContent = node.blockName || nodeLabel(node);
+    titleLine.appendChild(nameSpan);
+    tooltip.appendChild(titleLine);
+
+    // Second line: description, if present. Slightly muted from the
+    // white name so the visual hierarchy is clear (name = headline,
+    // description = body).
+    if (node.blockDescription) {
+        const descLine = document.createElement("div");
+        descLine.textContent = node.blockDescription;
+        descLine.style.marginTop = "4px";
+        descLine.style.color = "rgba(255, 255, 255, 0.85)";
+        descLine.style.fontWeight = "400";
+        tooltip.appendChild(descLine);
+    }
+
+    tooltip.style.display = "block";
+    positionTooltip(event, tooltip, container);
+}
+
+function positionTooltip(event, tooltip, container) {
+    // Compute container-local coordinates from the viewport-relative
+    // event coords. Also add the scrollLeft/scrollTop so the tooltip
+    // stays glued to the cursor when the user has scrolled the canvas.
+    const rect = container.getBoundingClientRect();
+    const localX = event.clientX - rect.left + container.scrollLeft;
+    const localY = event.clientY - rect.top + container.scrollTop;
+
+    // Offset from cursor so the tooltip doesn't sit directly under the
+    // pointer (would block view of what's being hovered).
+    const offset = 14;
+    tooltip.style.left = `${localX + offset}px`;
+    tooltip.style.top = `${localY + offset}px`;
+}
+
+function hideTooltip(tooltip) {
+    tooltip.style.display = "none";
+}
+
 // --- shape drawing -------------------------------------------------------
 
 function nodeLabel(node) {
@@ -812,30 +935,27 @@ function drawShape(sel, style) {
     const h = NODE_H;
     switch (style.shape) {
         case "rect":
-            sel.append("rect")
+            return sel.append("rect")
                 .attr("x", -w / 2).attr("y", -h / 2)
                 .attr("width", w).attr("height", h)
                 .attr("rx", 6).attr("ry", 6)
                 .attr("fill", style.fill).attr("stroke", style.stroke)
                 .attr("stroke-width", 1.5);
-            break;
         case "oval":
-            sel.append("rect")
+            return sel.append("rect")
                 .attr("x", -w / 2).attr("y", -h / 2)
                 .attr("width", w).attr("height", h)
                 .attr("rx", h / 2).attr("ry", h / 2)
                 .attr("fill", style.fill).attr("stroke", style.stroke)
                 .attr("stroke-width", 1.5);
-            break;
         case "diamond":
-            sel.append("polygon")
+            return sel.append("polygon")
                 .attr("points",
                     `0,${-h / 2} ${w / 2},0 0,${h / 2} ${-w / 2},0`)
                 .attr("fill", style.fill).attr("stroke", style.stroke)
                 .attr("stroke-width", 1.5);
-            break;
         default:
-            sel.append("rect")
+            return sel.append("rect")
                 .attr("x", -w / 2).attr("y", -h / 2)
                 .attr("width", w).attr("height", h)
                 .attr("fill", "#ccc").attr("stroke", "#999");
