@@ -748,6 +748,275 @@ internal sealed class WorkflowNodeRepository : IWorkflowNodeRepository
         }
     }
 
+    public async Task<DeleteSubtreeResult> DeleteSubtreeAsync(int nodeId, CancellationToken ct = default)
+    {
+        // Atomic subtree delete. Used by the "delete entire branch" action
+        // on Decisions and as the "delete this and N descendants" option
+        // on Process node deletion.
+        //
+        // Order of operations inside the transaction:
+        //   1. Probe the node: exists, version is Draft, not Start.
+        //   2. Walk descendants via recursive CTE; collect IDs.
+        //   3. Null the upstream parent's path FK that points at the
+        //      subtree root (must happen before the delete to avoid the
+        //      FK_workflow_nodes_path1 / path2 constraint violations on
+        //      cascade).
+        //   4. Null workflow.start_node_id if it points at any subtree
+        //      node (defensive — Start delete is rejected above, so this
+        //      should only fire if a descendant is somehow the start; in
+        //      a healthy workflow it's a no-op).
+        //   5. Null all path1/path2 within the subtree so the DELETE
+        //      doesn't see intra-subtree FK references.
+        //   6. DELETE all subtree rows in one statement.
+        using var connection = await _connectionFactory.CreateOpenConnectionAsync(ct);
+        using var transaction = connection.BeginTransaction();
+
+        try
+        {
+            var probe = await connection.QuerySingleOrDefaultAsync<NodeShapeStateProbe>(
+                new CommandDefinition(
+                    @"SELECT n.workflow_definition_id AS WorkflowDefinitionId,
+                             n.node_type_id           AS NodeTypeId,
+                             ver.request_state        AS RequestStateCode
+                      FROM dbo.workflow_nodes n WITH (UPDLOCK, ROWLOCK)
+                      INNER JOIN dbo.workflow_definitions wd ON wd.id = n.workflow_definition_id
+                      INNER JOIN dbo.request_type_versions ver ON ver.id = wd.request_type_version_id
+                      WHERE n.id = @nodeId;",
+                    new { nodeId },
+                    transaction,
+                    cancellationToken: ct));
+
+            if (probe is null)
+            {
+                transaction.Rollback();
+                return new DeleteSubtreeResult(DeleteSubtreeOutcome.RejectedNodeNotFound, 0);
+            }
+            if (probe.RequestStateCode != RequestStateCodes.Draft)
+            {
+                transaction.Rollback();
+                return new DeleteSubtreeResult(DeleteSubtreeOutcome.RejectedNotDraft, 0);
+            }
+            if (probe.NodeTypeId == WorkflowNodeTypeIds.Start)
+            {
+                transaction.Rollback();
+                return new DeleteSubtreeResult(DeleteSubtreeOutcome.RejectedIsStart, 0);
+            }
+
+            // Count descendants for the result (caller wants to surface
+            // "deleted N nodes" — same count the UI computed before the
+            // confirm dialog, so the user sees the expected number).
+            // -1 to exclude the root itself; it's not a descendant.
+            var totalRows = await connection.ExecuteScalarAsync<int>(new CommandDefinition(
+                @";WITH subtree AS (
+                       SELECT id, path1_node_id, path2_node_id
+                       FROM dbo.workflow_nodes WHERE id = @nodeId
+                       UNION ALL
+                       SELECT child.id, child.path1_node_id, child.path2_node_id
+                       FROM dbo.workflow_nodes child
+                       INNER JOIN subtree parent
+                           ON child.id = parent.path1_node_id
+                           OR child.id = parent.path2_node_id
+                   )
+                   SELECT COUNT(*) FROM subtree;",
+                new { nodeId }, transaction, cancellationToken: ct));
+            var descendantsDeleted = Math.Max(0, totalRows - 1);
+
+            // 3. Null upstream parent's path FK pointing at this node.
+            await connection.ExecuteAsync(new CommandDefinition(
+                @"UPDATE dbo.workflow_nodes
+                  SET path1_node_id = CASE WHEN path1_node_id = @nodeId THEN NULL ELSE path1_node_id END,
+                      path2_node_id = CASE WHEN path2_node_id = @nodeId THEN NULL ELSE path2_node_id END
+                  WHERE workflow_definition_id = @workflowId
+                    AND (path1_node_id = @nodeId OR path2_node_id = @nodeId);",
+                new { nodeId, workflowId = probe.WorkflowDefinitionId },
+                transaction, cancellationToken: ct));
+
+            // 4-6. Null intra-subtree path FKs, then delete subtree rows.
+            // Both statements use the same recursive CTE definition.
+            // Doing it as two batched statements (one UPDATE, one DELETE)
+            // keeps each individually simple and lets SQL Server optimize
+            // the CTE recursion separately for each.
+            const string subtreeCte = @"
+                ;WITH subtree AS (
+                    SELECT id, path1_node_id, path2_node_id
+                    FROM dbo.workflow_nodes WHERE id = @nodeId
+                    UNION ALL
+                    SELECT n.id, n.path1_node_id, n.path2_node_id
+                    FROM dbo.workflow_nodes n
+                    INNER JOIN subtree s
+                        ON n.id = s.path1_node_id OR n.id = s.path2_node_id
+                )";
+
+            // 4. Defensive: if start_node_id happens to point inside the
+            // subtree (e.g. a descendant is the start — shouldn't happen
+            // because we reject Start delete above, but the schema
+            // permits arbitrary nodes being designated as start), null
+            // it before the cascade.
+            await connection.ExecuteAsync(new CommandDefinition(
+                subtreeCte + @"
+                  UPDATE wd
+                  SET start_node_id = NULL
+                  FROM dbo.workflow_definitions wd
+                  WHERE wd.id = @workflowId
+                    AND wd.start_node_id IN (SELECT id FROM subtree);",
+                new { nodeId, workflowId = probe.WorkflowDefinitionId },
+                transaction, cancellationToken: ct));
+
+            // 5. Null intra-subtree FKs so the DELETE doesn't violate
+            // FK_workflow_nodes_path1 / path2 when removing rows.
+            await connection.ExecuteAsync(new CommandDefinition(
+                subtreeCte + @"
+                  UPDATE n
+                  SET path1_node_id = NULL, path2_node_id = NULL
+                  FROM dbo.workflow_nodes n
+                  INNER JOIN subtree s ON s.id = n.id;",
+                new { nodeId }, transaction, cancellationToken: ct));
+
+            // 6. Delete the subtree.
+            await connection.ExecuteAsync(new CommandDefinition(
+                subtreeCte + @"
+                  DELETE n FROM dbo.workflow_nodes n
+                  INNER JOIN subtree s ON s.id = n.id;",
+                new { nodeId }, transaction, cancellationToken: ct));
+
+            transaction.Commit();
+            return new DeleteSubtreeResult(DeleteSubtreeOutcome.Deleted, descendantsDeleted);
+        }
+        catch
+        {
+            transaction.Rollback();
+            throw;
+        }
+    }
+
+    public async Task<DeleteAndSpliceOutcome> DeleteAndSpliceAsync(int nodeId, CancellationToken ct = default)
+    {
+        // Atomic splice-delete. Only valid for nodes with one out-edge
+        // (Start blocked, Process valid; Decision throws because two
+        // subtrees have no clean merge; terminals throw because they
+        // have no surviving child).
+        //
+        // Order:
+        //   1. Probe node + draft state + type.
+        //   2. Read node.path1_node_id = surviving child (may be null).
+        //   3. Find upstream parent + which slot of theirs points at us.
+        //   4. Replace parent's slot with the surviving child id.
+        //   5. Delete the node.
+        //   6. Renumber the surviving subtree starting at the
+        //      now-removed node's execution_level (shifts up by 1).
+        using var connection = await _connectionFactory.CreateOpenConnectionAsync(ct);
+        using var transaction = connection.BeginTransaction();
+
+        try
+        {
+            var probe = await connection.QuerySingleOrDefaultAsync<SpliceProbe>(
+                new CommandDefinition(
+                    @"SELECT n.workflow_definition_id AS WorkflowDefinitionId,
+                             n.node_type_id           AS NodeTypeId,
+                             n.execution_level        AS ExecutionLevel,
+                             n.path1_node_id          AS Path1NodeId,
+                             n.path2_node_id          AS Path2NodeId,
+                             ver.request_state        AS RequestStateCode
+                      FROM dbo.workflow_nodes n WITH (UPDLOCK, ROWLOCK)
+                      INNER JOIN dbo.workflow_definitions wd ON wd.id = n.workflow_definition_id
+                      INNER JOIN dbo.request_type_versions ver ON ver.id = wd.request_type_version_id
+                      WHERE n.id = @nodeId;",
+                    new { nodeId }, transaction, cancellationToken: ct));
+
+            if (probe is null)
+            {
+                transaction.Rollback();
+                return DeleteAndSpliceOutcome.RejectedNodeNotFound;
+            }
+            if (probe.RequestStateCode != RequestStateCodes.Draft)
+            {
+                transaction.Rollback();
+                return DeleteAndSpliceOutcome.RejectedNotDraft;
+            }
+            if (probe.NodeTypeId == WorkflowNodeTypeIds.Start)
+            {
+                transaction.Rollback();
+                return DeleteAndSpliceOutcome.RejectedIsStart;
+            }
+            // Caller bug: splice is not defined for these types.
+            if (probe.NodeTypeId == WorkflowNodeTypeIds.Decision)
+            {
+                transaction.Rollback();
+                throw new ArgumentException(
+                    $"DeleteAndSpliceAsync is not valid for Decision nodes (two subtrees, no clean splice). Node id={nodeId}.",
+                    nameof(nodeId));
+            }
+            if (probe.NodeTypeId is WorkflowNodeTypeIds.Approved
+                                or WorkflowNodeTypeIds.Rejected
+                                or WorkflowNodeTypeIds.Cancelled)
+            {
+                transaction.Rollback();
+                throw new ArgumentException(
+                    $"DeleteAndSpliceAsync is not valid for terminal nodes (no child to splice). Node id={nodeId}.",
+                    nameof(nodeId));
+            }
+
+            var survivingChild = probe.Path1NodeId;
+
+            // Find the upstream parent + slot. There should be at most
+            // one (no-merging invariant).
+            var parentSlot = await connection.QuerySingleOrDefaultAsync<ParentSlotProbe>(
+                new CommandDefinition(
+                    @"SELECT TOP 1
+                             id AS ParentId,
+                             CASE WHEN path1_node_id = @nodeId THEN 1
+                                  WHEN path2_node_id = @nodeId THEN 2
+                                  ELSE 0 END AS Slot
+                      FROM dbo.workflow_nodes
+                      WHERE workflow_definition_id = @workflowId
+                        AND (path1_node_id = @nodeId OR path2_node_id = @nodeId);",
+                    new { nodeId, workflowId = probe.WorkflowDefinitionId },
+                    transaction, cancellationToken: ct));
+
+            if (parentSlot is null)
+            {
+                // Orphan. Defensive — shouldn't happen for Process in
+                // normal workflows, but if it does, splice has no parent
+                // to wire the surviving child into. Treat as "not found"
+                // since structurally the node is unreachable.
+                transaction.Rollback();
+                return DeleteAndSpliceOutcome.RejectedNodeNotFound;
+            }
+
+            // 4. Replace parent's slot with survivingChild (may be null).
+            var wireSql = parentSlot.Slot == 1
+                ? "UPDATE dbo.workflow_nodes SET path1_node_id = @survivingChild WHERE id = @parentId;"
+                : "UPDATE dbo.workflow_nodes SET path2_node_id = @survivingChild WHERE id = @parentId;";
+            await connection.ExecuteAsync(new CommandDefinition(
+                wireSql,
+                new { parentSlot.ParentId, survivingChild },
+                transaction, cancellationToken: ct));
+
+            // 5. Delete the node. Its path1 is still pointing at the
+            // surviving child, but that's fine — we delete the parent
+            // (this node), not the child.
+            await connection.ExecuteAsync(new CommandDefinition(
+                "DELETE FROM dbo.workflow_nodes WHERE id = @nodeId;",
+                new { nodeId }, transaction, cancellationToken: ct));
+
+            // 6. Renumber the surviving subtree to shift up by 1. Skip
+            // if there was no surviving child.
+            if (survivingChild is int childId)
+            {
+                await RenumberSubtreeAsync(
+                    connection, transaction, childId, probe.ExecutionLevel, ct);
+            }
+
+            transaction.Commit();
+            return DeleteAndSpliceOutcome.Deleted;
+        }
+        catch
+        {
+            transaction.Rollback();
+            throw;
+        }
+    }
+
     /// <summary>
     /// Renumber the subtree rooted at <paramref name="rootNodeId"/>:
     /// root gets level <paramref name="rootLevel"/>, its path1/path2
@@ -832,5 +1101,28 @@ internal sealed class WorkflowNodeRepository : IWorkflowNodeRepository
     {
         public int WorkflowDefinitionId { get; init; }
         public int NodeTypeId { get; init; }
+    }
+
+    private sealed class NodeShapeStateProbe
+    {
+        public int WorkflowDefinitionId { get; init; }
+        public int NodeTypeId { get; init; }
+        public string RequestStateCode { get; init; } = string.Empty;
+    }
+
+    private sealed class SpliceProbe
+    {
+        public int WorkflowDefinitionId { get; init; }
+        public int NodeTypeId { get; init; }
+        public int ExecutionLevel { get; init; }
+        public int? Path1NodeId { get; init; }
+        public int? Path2NodeId { get; init; }
+        public string RequestStateCode { get; init; } = string.Empty;
+    }
+
+    private sealed class ParentSlotProbe
+    {
+        public int ParentId { get; init; }
+        public int Slot { get; init; }
     }
 }

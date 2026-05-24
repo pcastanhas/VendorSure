@@ -143,6 +143,38 @@ public enum SetStartNodeOutcome
     RejectedNotStartNode,
 }
 
+/// <summary>Outcome of <see cref="IWorkflowNodeRepository.DeleteSubtreeAsync"/>.</summary>
+public enum DeleteSubtreeOutcome
+{
+    Deleted,
+
+    /// <summary>The node doesn't exist.</summary>
+    RejectedNodeNotFound,
+
+    /// <summary>The node's workflow version isn't Draft.</summary>
+    RejectedNotDraft,
+
+    /// <summary>The node is a Start. Start nodes can never be deleted — every workflow needs its Start.</summary>
+    RejectedIsStart,
+}
+
+public sealed record DeleteSubtreeResult(DeleteSubtreeOutcome Outcome, int DescendantsDeleted);
+
+/// <summary>Outcome of <see cref="IWorkflowNodeRepository.DeleteAndSpliceAsync"/>.</summary>
+public enum DeleteAndSpliceOutcome
+{
+    Deleted,
+
+    /// <summary>The node doesn't exist.</summary>
+    RejectedNodeNotFound,
+
+    /// <summary>The node's workflow version isn't Draft.</summary>
+    RejectedNotDraft,
+
+    /// <summary>The node is a Start. Start nodes can never be deleted.</summary>
+    RejectedIsStart,
+}
+
 /// <summary>
 /// CRUD on <c>workflow_nodes</c> plus the wiring operations the designer
 /// needs (set path1/path2, set start node, delete with upstream
@@ -284,4 +316,50 @@ public interface IWorkflowNodeRepository
     /// </summary>
     Task<SetStartNodeOutcome> SetStartNodeAsync(
         int workflowDefinitionId, int? nodeId, CancellationToken ct = default);
+
+    /// <summary>
+    /// Atomically deletes a node and all of its descendants reachable via
+    /// path1/path2. Used by the designer's "delete entire branch" action
+    /// for Decisions (the only delete option, since Decision splice isn't
+    /// well-defined — two subtrees, no clean way to merge) and as the
+    /// "delete this and N descendants" option on Process node deletion
+    /// when the user picks subtree over splice.
+    /// </summary>
+    /// <remarks>
+    /// All work happens in one transaction:
+    ///   1. Walk descendants via recursive CTE.
+    ///   2. Null the upstream parent's path FK that pointed at the root
+    ///      of the subtree being deleted.
+    ///   3. Null all path FKs WITHIN the subtree so the cascade delete
+    ///      doesn't violate any self-referential FK during row removal.
+    ///   4. Delete all rows in the subtree (including the root).
+    ///
+    /// Start cannot be deleted (every workflow needs its Start). Caller
+    /// receives RejectedIsStart and the data is untouched.
+    /// </remarks>
+    Task<DeleteSubtreeResult> DeleteSubtreeAsync(int nodeId, CancellationToken ct = default);
+
+    /// <summary>
+    /// Atomically deletes a node and lifts its single child up into its
+    /// place. Valid only for Start (blocked by RejectedIsStart) and
+    /// Process — nodes with at most one out-edge (path1). For Decision
+    /// or terminal nodes, throws <see cref="ArgumentException"/>: the
+    /// UI shouldn't offer splice for those.
+    /// </summary>
+    /// <remarks>
+    /// The "splice into parent" option on Process node deletion. Replaces
+    /// the upstream parent's path FK with the deleted node's path1 (the
+    /// surviving child, which may be null). Renumbers the surviving
+    /// subtree to shift up by 1 via the existing recursive CTE.
+    ///
+    /// Edge cases handled atomically:
+    ///   - Surviving child is null (Process had no descendants): parent's
+    ///     FK becomes null; no renumber needed.
+    ///   - Surviving child has its own descendants: full subtree
+    ///     renumbered upward.
+    ///   - Node is orphaned (no upstream parent): defensive — shouldn't
+    ///     happen in normal workflows, returns RejectedNodeNotFound to
+    ///     avoid producing inconsistent state.
+    /// </remarks>
+    Task<DeleteAndSpliceOutcome> DeleteAndSpliceAsync(int nodeId, CancellationToken ct = default);
 }

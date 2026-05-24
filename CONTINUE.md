@@ -4,9 +4,10 @@
 
 ## Where we are
 
-**Phase 5 in progress.** Chunks 1-7 done. Major design shift in
-Chunk 7 (the previous "free drop palette" model from Chunk 6 was
-superseded by a +-button graph-construction model):
+**Phase 5 in progress.** Chunks 1-7 and 9 done (Chunk 8 deferred
+pending user review of need). Chunk 7 was the design pivot from
+Chunk 6's "free drop palette" model to the +-button graph
+construction model; Chunk 9 added the matching deletion surface:
 
   - Every workflow has a Start node, auto-created in
     `WorkflowDefinitionRepository.CreateAsync` inside the same
@@ -35,8 +36,22 @@ superseded by a +-button graph-construction model):
     the data layer is gone for this rule; the cost was a hard
     block on the new model, since Decisions necessarily exist
     with one or zero children mid-design.
+  - **Chunk 9** added X (delete) buttons in the top-left of every
+    non-Start node, plus a confirmation dialog that branches:
+      - Terminal or childless Process: plain confirm.
+      - Process with descendants: two buttons — splice into
+        parent (`DeleteAndSpliceAsync` lifts the single child up
+        one level, renumbers the surviving subtree via the same
+        CTE) or delete subtree (`DeleteSubtreeAsync` recursively
+        removes the node and all descendants).
+      - Decision: single destructive button, no splice option
+        (two subtrees can't cleanly merge). Both-subtree count
+        surfaced in the confirm copy.
+    Start delete is blocked — the X button isn't even rendered
+    on Start.
 
-Test surface: 158 → 178 (+1 workflow def repo, +19 node repo).
+Test surface: 158 → 193 (+1 workflow def repo, +19 node repo
+Chunk 7, +15 node repo Chunk 9).
 
 Phase 5 design settled before code (post-Chunk-7 shift):
   - **D3.js** for the SVG canvas. No React, no build pipeline,
@@ -78,7 +93,7 @@ Read these to get oriented:
   §3.1 and §3.2 still scheduled for refresh in Phase 6 / Phase 9.
 - `BUILD.md` — how to build/run locally. "What's currently built
   (Phases 1-4)" summarises the shipped surface.
-- `LessonsLearned.md` — sixteen entries.
+- `LessonsLearned.md` — nineteen entries.
 - `docs/REMOVE-BEFORE-PROD.md` — debug identity shim cutover checklist.
 
 ## Approach rules (locked in during design)
@@ -166,59 +181,7 @@ and `dotnet test`, reports back.
 
 ## Suggested next session
 
-**Phase 5 / Chunk 8 — Node property editor.**
-
-Side panel that opens when the user clicks a node body (not a +
-button). Reads the node's editable properties and lets the user
-update them. Properties on `workflow_node` per the schema:
-  - prompt_text, path1_prompt_text, path2_prompt_text
-  - approver_group_id (FK to approver_groups, when seeded)
-  - stale_threshold_days, stale_message_text
-  - notes
-
-Scope:
-  - JS module: add a body-click handler on each node `<g>`. On
-    click, call a new `[JSInvokable] OnNodeClickedAsync(nodeId)`.
-    Distinguish from + clicks by stopping propagation on the +
-    button (already done in Chunk 7).
-  - Razor: a `MudDrawer` or `MudCard` panel on the right side
-    that becomes visible when a node is selected. Loads
-    `_selectedNode` via `NodeRepository.GetByIdAsync(nodeId)`.
-    Fields per the node's type (Decision shows path1/path2
-    prompt text; non-Decision shows only prompt_text). Approver
-    group dropdown if the seeded `approver_groups` table has
-    rows (otherwise hide).
-  - Auto-save on blur per the locked design: each field commits
-    via `UpdateAsync` when focus leaves. Snackbar on save.
-  - Visual cue on the canvas: the selected node gets a thicker
-    stroke or a glow. JS module reads a `selectedNodeId` from
-    the graph data payload to know which node to highlight.
-
-No schema changes. `UpdateAsync` already shipped in Chunk 3 and
-handles all the property fields.
-
-**Chunk 9 — Delete affordances.**
-
-Per the design conversation: terminal delete is confirm-only,
-Process delete asks "keep descendants — splice into parent" or
-"delete this and N descendants," Decision delete is a single
-warning ("Delete this Decision and both subtrees, N total
-descendants?" — no splice option). Start delete is blocked.
-
-New repo methods needed:
-  - `DeleteSubtreeAsync(rootNodeId)`: recursive CTE to find all
-    descendants reachable via path1/path2; null upstream parent
-    FK; delete the subtree in dependency order; delete root.
-  - `DeleteAndSpliceAsync(nodeId)`: only valid for single-child
-    nodes (Start, Process). Read the node's path1 (= surviving
-    child). Update parent's pointer to skip the deleted node.
-    Delete the node. Renumber the surviving subtree (shift up
-    by 1) via the existing `RenumberSubtreeAsync` CTE.
-
-The existing `DeleteAsync` from Chunk 3 stays as the leaf-only
-primitive (no splice, no subtree). Tests for it still apply.
-
-**Chunk 10 — Promotion-time validation.**
+**Phase 5 / Chunk 10 — Promotion-time validation + end-of-phase rollup.**
 
 The version's `Draft → InService` transition
 (`RequestTypeVersionRepository.TransitionToInServiceAsync` from
@@ -226,24 +189,58 @@ Phase 4) must refuse promotion when any workflow on the version
 has a malformed graph: every non-terminal node must have its
 required children present.
 
-Required because the schema CHECK that used to enforce
-"every Decision has both path1 and path2 set" was dropped in
-Chunk 7's bug-fix follow-up. Defense-in-depth is gone at the
+This is **load-bearing** because the schema CHECK that used to
+enforce "every Decision has both path1 and path2 set" was dropped
+in Chunk 7's bug-fix follow-up. Defense-in-depth is gone at the
 data layer; the promotion gate is now the sole enforcer.
 
 Concretely:
   - SQL pre-check in `TransitionToInServiceAsync`: count
-    Decisions with NULL path1 or path2, AND count Start/Process
-    nodes with NULL path1 (Decision is excluded because Decision
-    is a per-slot rule). If any → return a new outcome enum
-    value (`RejectedIncompleteWorkflow` or similar) with the
-    offending workflow names attached.
+    non-terminal nodes with missing required children. The rules:
+      - Decision: needs both path1 and path2.
+      - Start, Process: needs path1.
+      - Terminals: no children.
+    If any → return a new outcome enum value
+    (`RejectedIncompleteWorkflow` or similar) with the offending
+    workflow names attached, or just the count for a generic
+    "X workflows have incomplete graphs" message.
   - Inline incomplete-badge rendering on the canvas (the
     designer-page side): the JS module shows a small yellow !
     on any node missing its required children. Helps the user
-    fix things before trying to promote.
-  - End-of-phase rollup: PLAN doc, CONCEPT polish, ad-hoc
-    cleanup of any temp UI affordances (the node-list readout
-    table below the canvas can probably go in this chunk).
+    fix things before trying to promote. The dashed-edge-to-a-+
+    pattern from Chunk 7's polish already conveys this visually
+    for empty slots; the badge would be a separate cue for nodes
+    in an already-incomplete state (e.g. a Decision with only
+    one branch where the user might miss the dashed edge in a
+    busy canvas).
+  - End-of-phase rollup:
+      - Update PLAN.md to reflect what actually shipped vs the
+        provisional Phase 5 chunk list.
+      - CONCEPT.md final polish.
+      - Remove the temporary node-list readout table below the
+        canvas. The visual is enough now that delete and insert
+        both work end-to-end.
+
+**Chunk 8 — Node property editor (deferred).**
+
+Deferred at user request pending review of whether it's needed
+for Phase 5 close-out. Node property editor would be the side
+panel that lets users set prompt_text, approver_group_id,
+stale_threshold_days, stale_message_text, notes on individual
+nodes. `UpdateAsync` already shipped in Chunk 3 and handles all
+these fields, so the repo work is done; what remains is purely
+UI:
+  - Body-click handler on each node `<g>` in the JS module.
+  - `[JSInvokable] OnNodeClickedAsync(nodeId)` opens a side panel.
+  - Field shape depends on node type (Decision shows path1/path2
+    prompt; non-Decision shows only prompt).
+  - Auto-save on blur (locked design).
+  - Selected-node visual highlight on the canvas.
+
+If we decide we don't need it for v1, the editable fields stay
+at their defaults until someone manually edits the DB rows. The
+workflow engine (Phase 6+) will run either way.
+
+**Chunk 9 — Delete affordances (DONE, see Where We Are).**
 
 PAT note: each session, user provides a short-lived PAT for the repo.

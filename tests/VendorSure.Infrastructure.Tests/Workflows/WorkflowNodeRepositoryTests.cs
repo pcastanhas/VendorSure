@@ -938,6 +938,281 @@ public sealed class WorkflowNodeRepositoryTests
         Assert.Null(decision.Path2NodeId);
     }
 
+    // ==== DeleteSubtreeAsync ==============================================
+
+    [Fact]
+    public async Task DeleteSubtreeAsync_removes_leaf_terminal()
+    {
+        await using var f = await SetupAsync();
+        var start = (await _nodes.CreateAsync(StartNode(f.WorkflowId))).Id!.Value;
+        await _nodes.SetStartNodeAsync(f.WorkflowId, start);
+        var approved = (await _nodes.InsertChildAsync(new InsertChildRequest(
+            start, 1, WorkflowNodeTypeIds.Approved, null))).Id!.Value;
+
+        var result = await _nodes.DeleteSubtreeAsync(approved);
+        Assert.Equal(DeleteSubtreeOutcome.Deleted, result.Outcome);
+        Assert.Equal(0, result.DescendantsDeleted);
+
+        Assert.Null(await _nodes.GetByIdAsync(approved));
+        // Parent's path1 was nulled.
+        var startAfter = await _nodes.GetByIdAsync(start);
+        Assert.Null(startAfter!.Path1NodeId);
+    }
+
+    [Fact]
+    public async Task DeleteSubtreeAsync_removes_process_and_its_descendants()
+    {
+        // Start (1) -> Process (2) -> Approved (3). Delete Process →
+        // both Process and Approved gone, Start.path1 nulled.
+        await using var f = await SetupAsync();
+        var start = (await _nodes.CreateAsync(StartNode(f.WorkflowId))).Id!.Value;
+        await _nodes.SetStartNodeAsync(f.WorkflowId, start);
+        var process = (await _nodes.InsertChildAsync(new InsertChildRequest(
+            start, 1, WorkflowNodeTypeIds.Process, f.BlockId))).Id!.Value;
+        var approved = (await _nodes.InsertChildAsync(new InsertChildRequest(
+            process, 1, WorkflowNodeTypeIds.Approved, null))).Id!.Value;
+
+        var result = await _nodes.DeleteSubtreeAsync(process);
+        Assert.Equal(DeleteSubtreeOutcome.Deleted, result.Outcome);
+        Assert.Equal(1, result.DescendantsDeleted);
+
+        Assert.Null(await _nodes.GetByIdAsync(process));
+        Assert.Null(await _nodes.GetByIdAsync(approved));
+        Assert.Null((await _nodes.GetByIdAsync(start))!.Path1NodeId);
+    }
+
+    [Fact]
+    public async Task DeleteSubtreeAsync_removes_Decision_and_both_branches()
+    {
+        // Start -> Decision -> { Approved, Rejected }. Delete Decision →
+        // all three children gone, Start.path1 nulled.
+        await using var f = await SetupAsync();
+        var start = (await _nodes.CreateAsync(StartNode(f.WorkflowId))).Id!.Value;
+        await _nodes.SetStartNodeAsync(f.WorkflowId, start);
+        var decision = (await _nodes.InsertChildAsync(new InsertChildRequest(
+            start, 1, WorkflowNodeTypeIds.Decision, f.BlockId))).Id!.Value;
+        var approved = (await _nodes.InsertChildAsync(new InsertChildRequest(
+            decision, 1, WorkflowNodeTypeIds.Approved, null))).Id!.Value;
+        var rejected = (await _nodes.InsertChildAsync(new InsertChildRequest(
+            decision, 2, WorkflowNodeTypeIds.Rejected, null))).Id!.Value;
+
+        var result = await _nodes.DeleteSubtreeAsync(decision);
+        Assert.Equal(DeleteSubtreeOutcome.Deleted, result.Outcome);
+        Assert.Equal(2, result.DescendantsDeleted);
+
+        Assert.Null(await _nodes.GetByIdAsync(decision));
+        Assert.Null(await _nodes.GetByIdAsync(approved));
+        Assert.Null(await _nodes.GetByIdAsync(rejected));
+        Assert.Null((await _nodes.GetByIdAsync(start))!.Path1NodeId);
+    }
+
+    [Fact]
+    public async Task DeleteSubtreeAsync_removes_deep_nested_subtree()
+    {
+        // Start (1) -> Process (2) -> Decision (3) -> Process (4) -> Approved (5).
+        // Delete the level-3 Decision: levels 3-5 gone (3 descendants
+        // including the decision: wait, descendants = below the root).
+        // The Decision is the root of the subtree we delete; descendants
+        // are the level-4 Process and level-5 Approved (2 descendants).
+        await using var f = await SetupAsync();
+        var start = (await _nodes.CreateAsync(StartNode(f.WorkflowId))).Id!.Value;
+        await _nodes.SetStartNodeAsync(f.WorkflowId, start);
+        var p1 = (await _nodes.InsertChildAsync(new InsertChildRequest(
+            start, 1, WorkflowNodeTypeIds.Process, f.BlockId))).Id!.Value;
+        var decision = (await _nodes.InsertChildAsync(new InsertChildRequest(
+            p1, 1, WorkflowNodeTypeIds.Decision, f.BlockId))).Id!.Value;
+        var p2 = (await _nodes.InsertChildAsync(new InsertChildRequest(
+            decision, 1, WorkflowNodeTypeIds.Process, f.BlockId))).Id!.Value;
+        var approved = (await _nodes.InsertChildAsync(new InsertChildRequest(
+            p2, 1, WorkflowNodeTypeIds.Approved, null))).Id!.Value;
+
+        var result = await _nodes.DeleteSubtreeAsync(decision);
+        Assert.Equal(DeleteSubtreeOutcome.Deleted, result.Outcome);
+        Assert.Equal(2, result.DescendantsDeleted);
+
+        Assert.Null(await _nodes.GetByIdAsync(decision));
+        Assert.Null(await _nodes.GetByIdAsync(p2));
+        Assert.Null(await _nodes.GetByIdAsync(approved));
+
+        // p1 survived; its path1 (which pointed at decision) is now null.
+        var p1After = await _nodes.GetByIdAsync(p1);
+        Assert.NotNull(p1After);
+        Assert.Null(p1After!.Path1NodeId);
+    }
+
+    [Fact]
+    public async Task DeleteSubtreeAsync_rejects_Start()
+    {
+        await using var f = await SetupAsync();
+        var start = (await _nodes.CreateAsync(StartNode(f.WorkflowId))).Id!.Value;
+        await _nodes.SetStartNodeAsync(f.WorkflowId, start);
+
+        var result = await _nodes.DeleteSubtreeAsync(start);
+        Assert.Equal(DeleteSubtreeOutcome.RejectedIsStart, result.Outcome);
+        Assert.Equal(0, result.DescendantsDeleted);
+
+        // Start still exists.
+        Assert.NotNull(await _nodes.GetByIdAsync(start));
+    }
+
+    [Fact]
+    public async Task DeleteSubtreeAsync_rejects_not_found()
+    {
+        await using var f = await SetupAsync();
+        var result = await _nodes.DeleteSubtreeAsync(int.MaxValue - 1);
+        Assert.Equal(DeleteSubtreeOutcome.RejectedNodeNotFound, result.Outcome);
+    }
+
+    [Fact]
+    public async Task DeleteSubtreeAsync_rejects_when_version_not_Draft()
+    {
+        await using var f = await SetupAsync();
+        var start = (await _nodes.CreateAsync(StartNode(f.WorkflowId))).Id!.Value;
+        await _nodes.SetStartNodeAsync(f.WorkflowId, start);
+        var process = (await _nodes.InsertChildAsync(new InsertChildRequest(
+            start, 1, WorkflowNodeTypeIds.Process, f.BlockId))).Id!.Value;
+
+        await ForceVersionStateAsync(f.VersionId, RequestStateCodes.InService);
+
+        var result = await _nodes.DeleteSubtreeAsync(process);
+        Assert.Equal(DeleteSubtreeOutcome.RejectedNotDraft, result.Outcome);
+        Assert.NotNull(await _nodes.GetByIdAsync(process));
+    }
+
+    // ==== DeleteAndSpliceAsync ============================================
+
+    [Fact]
+    public async Task DeleteAndSpliceAsync_lifts_single_child_up_one_level()
+    {
+        // Start (1) -> Process (2) -> Approved (3). Splice-delete Process →
+        // Start (1) -> Approved (2).
+        await using var f = await SetupAsync();
+        var start = (await _nodes.CreateAsync(StartNode(f.WorkflowId))).Id!.Value;
+        await _nodes.SetStartNodeAsync(f.WorkflowId, start);
+        var process = (await _nodes.InsertChildAsync(new InsertChildRequest(
+            start, 1, WorkflowNodeTypeIds.Process, f.BlockId))).Id!.Value;
+        var approved = (await _nodes.InsertChildAsync(new InsertChildRequest(
+            process, 1, WorkflowNodeTypeIds.Approved, null))).Id!.Value;
+
+        var result = await _nodes.DeleteAndSpliceAsync(process);
+        Assert.Equal(DeleteAndSpliceOutcome.Deleted, result);
+
+        Assert.Null(await _nodes.GetByIdAsync(process));
+        var startAfter = await _nodes.GetByIdAsync(start);
+        Assert.Equal(approved, startAfter!.Path1NodeId);
+
+        var approvedAfter = await _nodes.GetByIdAsync(approved);
+        Assert.Equal(2, approvedAfter!.ExecutionLevel);
+    }
+
+    [Fact]
+    public async Task DeleteAndSpliceAsync_renumbers_full_surviving_subtree()
+    {
+        // Start (1) -> P1 (2) -> P2 (3) -> Approved (4). Splice-delete P1 →
+        // Start (1) -> P2 (2) -> Approved (3). Whole subtree shifts up.
+        await using var f = await SetupAsync();
+        var start = (await _nodes.CreateAsync(StartNode(f.WorkflowId))).Id!.Value;
+        await _nodes.SetStartNodeAsync(f.WorkflowId, start);
+        var p1 = (await _nodes.InsertChildAsync(new InsertChildRequest(
+            start, 1, WorkflowNodeTypeIds.Process, f.BlockId))).Id!.Value;
+        var p2 = (await _nodes.InsertChildAsync(new InsertChildRequest(
+            p1, 1, WorkflowNodeTypeIds.Process, f.BlockId))).Id!.Value;
+        var approved = (await _nodes.InsertChildAsync(new InsertChildRequest(
+            p2, 1, WorkflowNodeTypeIds.Approved, null))).Id!.Value;
+
+        var result = await _nodes.DeleteAndSpliceAsync(p1);
+        Assert.Equal(DeleteAndSpliceOutcome.Deleted, result);
+
+        Assert.Null(await _nodes.GetByIdAsync(p1));
+        Assert.Equal(p2, (await _nodes.GetByIdAsync(start))!.Path1NodeId);
+        Assert.Equal(2, (await _nodes.GetByIdAsync(p2))!.ExecutionLevel);
+        Assert.Equal(3, (await _nodes.GetByIdAsync(approved))!.ExecutionLevel);
+    }
+
+    [Fact]
+    public async Task DeleteAndSpliceAsync_nulls_parent_pointer_when_no_surviving_child()
+    {
+        // Start (1) -> Process (2). Process has no child yet. Splice-delete
+        // Process → Start.path1 becomes null.
+        await using var f = await SetupAsync();
+        var start = (await _nodes.CreateAsync(StartNode(f.WorkflowId))).Id!.Value;
+        await _nodes.SetStartNodeAsync(f.WorkflowId, start);
+        var process = (await _nodes.InsertChildAsync(new InsertChildRequest(
+            start, 1, WorkflowNodeTypeIds.Process, f.BlockId))).Id!.Value;
+
+        var result = await _nodes.DeleteAndSpliceAsync(process);
+        Assert.Equal(DeleteAndSpliceOutcome.Deleted, result);
+
+        Assert.Null(await _nodes.GetByIdAsync(process));
+        Assert.Null((await _nodes.GetByIdAsync(start))!.Path1NodeId);
+    }
+
+    [Fact]
+    public async Task DeleteAndSpliceAsync_throws_for_Decision_node()
+    {
+        await using var f = await SetupAsync();
+        var start = (await _nodes.CreateAsync(StartNode(f.WorkflowId))).Id!.Value;
+        await _nodes.SetStartNodeAsync(f.WorkflowId, start);
+        var decision = (await _nodes.InsertChildAsync(new InsertChildRequest(
+            start, 1, WorkflowNodeTypeIds.Decision, f.BlockId))).Id!.Value;
+
+        await Assert.ThrowsAsync<ArgumentException>(
+            () => _nodes.DeleteAndSpliceAsync(decision));
+
+        // Decision still exists — transaction rolled back.
+        Assert.NotNull(await _nodes.GetByIdAsync(decision));
+    }
+
+    [Fact]
+    public async Task DeleteAndSpliceAsync_throws_for_terminal()
+    {
+        await using var f = await SetupAsync();
+        var start = (await _nodes.CreateAsync(StartNode(f.WorkflowId))).Id!.Value;
+        await _nodes.SetStartNodeAsync(f.WorkflowId, start);
+        var approved = (await _nodes.InsertChildAsync(new InsertChildRequest(
+            start, 1, WorkflowNodeTypeIds.Approved, null))).Id!.Value;
+
+        await Assert.ThrowsAsync<ArgumentException>(
+            () => _nodes.DeleteAndSpliceAsync(approved));
+        Assert.NotNull(await _nodes.GetByIdAsync(approved));
+    }
+
+    [Fact]
+    public async Task DeleteAndSpliceAsync_rejects_Start()
+    {
+        await using var f = await SetupAsync();
+        var start = (await _nodes.CreateAsync(StartNode(f.WorkflowId))).Id!.Value;
+        await _nodes.SetStartNodeAsync(f.WorkflowId, start);
+
+        var result = await _nodes.DeleteAndSpliceAsync(start);
+        Assert.Equal(DeleteAndSpliceOutcome.RejectedIsStart, result);
+        Assert.NotNull(await _nodes.GetByIdAsync(start));
+    }
+
+    [Fact]
+    public async Task DeleteAndSpliceAsync_rejects_not_found()
+    {
+        await using var f = await SetupAsync();
+        var result = await _nodes.DeleteAndSpliceAsync(int.MaxValue - 1);
+        Assert.Equal(DeleteAndSpliceOutcome.RejectedNodeNotFound, result);
+    }
+
+    [Fact]
+    public async Task DeleteAndSpliceAsync_rejects_when_version_not_Draft()
+    {
+        await using var f = await SetupAsync();
+        var start = (await _nodes.CreateAsync(StartNode(f.WorkflowId))).Id!.Value;
+        await _nodes.SetStartNodeAsync(f.WorkflowId, start);
+        var process = (await _nodes.InsertChildAsync(new InsertChildRequest(
+            start, 1, WorkflowNodeTypeIds.Process, f.BlockId))).Id!.Value;
+
+        await ForceVersionStateAsync(f.VersionId, RequestStateCodes.InService);
+
+        var result = await _nodes.DeleteAndSpliceAsync(process);
+        Assert.Equal(DeleteAndSpliceOutcome.RejectedNotDraft, result);
+        Assert.NotNull(await _nodes.GetByIdAsync(process));
+    }
+
     // ---- fixture / helpers ---------------------------------------------
 
     private sealed class Fixture : IAsyncDisposable

@@ -1,10 +1,13 @@
 // Workflow Designer — D3 rendering module
 //
-// Phase 5 / Chunks 5-7: renders the workflow graph as SVG inside the
-// canvas div, plus draws + affordances on each non-terminal node's
-// open slots. Clicks on + propagate to Blazor via the DotNetObjectReference
-// the page passes during mount(). No drag/drop — Chunk 6's palette
-// surface was superseded by the +-button model in Chunk 7.
+// Phase 5 / Chunks 5-9: renders the workflow graph as SVG inside the
+// canvas div, plus draws affordances on each node:
+//   - + buttons on every non-terminal node's open slots (Chunks 5-7).
+//   - X (delete) buttons in the top-left of every node except Start
+//     (Chunk 9).
+// Clicks propagate to Blazor via the DotNetObjectReference the page
+// passes during mount(). Both affordances render only when dotNetRef
+// is non-null (i.e. when the workflow is editable).
 //
 // Layout: subtree-width-aware, top-down from each root. Non-Decision
 // parents sit directly above their single child; Decision parents
@@ -44,6 +47,7 @@ const MIN_HALF_WIDTH = 80;       // minimum half-spacing for a Decision's branch
 const TOP_PADDING = 40;
 const LEFT_PADDING = 40;
 const PLUS_RADIUS = 11;          // the + button circle's radius
+const X_RADIUS = 9;              // the X (delete) button — slightly smaller
 
 // Per-node-type appearance. Fill/stroke colors are readable on both
 // light and dark MudBlazor themes. Decision uses a saturated orange so
@@ -243,6 +247,50 @@ export async function mount(selector, graphData, dotNetRef) {
                     .attr("fill", "#1976d2")
                     .style("pointer-events", "none")  // clicks pass to <g>
                     .text("+");
+            });
+    }
+
+    // X (delete) buttons. One per node, except Start. Only rendered when
+    // the workflow is editable (entry.dotNetRef is truthy).
+    // Position: top-left corner of the node body. Diamonds get an inset
+    // adjustment so the X doesn't float outside the visible fill area.
+    if (entry.dotNetRef) {
+        const deletableNodes = positioned.filter(
+            (n) => n.nodeTypeId !== NODE_TYPE.Start);
+        const xPositions = deletableNodes.map((n) => {
+            // Diamond: inset further so the X sits over the diamond's
+            // upper-left slope, not outside the shape. Use NODE_W/4
+            // and NODE_H/4 for a comfortable position.
+            const isDiamond = n.nodeTypeId === NODE_TYPE.Decision;
+            const dx = isDiamond ? -NODE_W / 4 : -NODE_W / 2 + 12;
+            const dy = isDiamond ? -NODE_H / 4 : -NODE_H / 2 + 12;
+            return { nodeId: n.id, x: n.x + dx, y: n.y + dy };
+        });
+
+        const xG = svg.append("g").attr("class", "delete-buttons");
+        xG.selectAll("g")
+            .data(xPositions)
+            .enter()
+            .append("g")
+            .attr("class", "delete-button")
+            .attr("transform", (d) => `translate(${d.x}, ${d.y})`)
+            .style("cursor", "pointer")
+            .on("click", (event, d) => onDeleteClick(event, d.nodeId, entry.dotNetRef))
+            .each(function () {
+                const g = d3.select(this);
+                g.append("circle")
+                    .attr("r", X_RADIUS)
+                    .attr("fill", "#fff")
+                    .attr("stroke", "#c62828")  // Material red 800
+                    .attr("stroke-width", 1.5);
+                g.append("text")
+                    .attr("text-anchor", "middle")
+                    .attr("dominant-baseline", "central")
+                    .attr("font-size", "13px")
+                    .attr("font-weight", "600")
+                    .attr("fill", "#c62828")
+                    .style("pointer-events", "none")
+                    .text("×");
             });
     }
 
@@ -508,6 +556,16 @@ function onPlusClick(event, button, dotNetRef) {
     ).catch((err) => {
         console.warn("workflow-designer: Blazor plus-click callback failed.", err);
     });
+}
+
+function onDeleteClick(event, nodeId, dotNetRef) {
+    event.stopPropagation();
+    if (!dotNetRef) return;
+
+    dotNetRef.invokeMethodAsync("OnDeleteClickedAsync", nodeId)
+        .catch((err) => {
+            console.warn("workflow-designer: Blazor delete-click callback failed.", err);
+        });
 }
 
 // --- shape drawing -------------------------------------------------------

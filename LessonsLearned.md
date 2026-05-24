@@ -738,3 +738,149 @@ won't promote to InService without two. Both moves follow the
 same pattern: trust the UI to enforce structure in normal use,
 trust the promotion gate to refuse degenerate workflows, and
 let the schema be relaxed enough not to fight either.
+
+## 2026-05-24 — Cascade delete with self-referential FK: null edges first, then DELETE
+
+Phase 5 / Chunk 9. Added `DeleteSubtreeAsync` for the "delete
+this Decision and both subtrees" / "delete this Process and N
+descendants" UI flows. The schema's `workflow_nodes` table has
+two self-referential FKs (`path1_node_id`, `path2_node_id`) plus
+a third referenced table FK (`workflow_definitions.start_node_id`).
+A naive `DELETE FROM workflow_nodes WHERE id IN (subtree)` blows
+up on FK violations: rows in the subtree still reference each
+other.
+
+The pattern that works:
+
+```sql
+;WITH subtree AS (
+    SELECT id, path1_node_id, path2_node_id
+    FROM dbo.workflow_nodes WHERE id = @nodeId
+    UNION ALL
+    SELECT n.id, n.path1_node_id, n.path2_node_id
+    FROM dbo.workflow_nodes n
+    INNER JOIN subtree s
+        ON n.id = s.path1_node_id OR n.id = s.path2_node_id
+)
+-- Step 1: null all intra-subtree FK references.
+UPDATE n SET path1_node_id = NULL, path2_node_id = NULL
+FROM dbo.workflow_nodes n
+INNER JOIN subtree s ON s.id = n.id;
+
+-- Step 2: now safe to delete; no row references any other row.
+;WITH subtree AS (... same CTE ...)
+DELETE n FROM dbo.workflow_nodes n
+INNER JOIN subtree s ON s.id = n.id;
+```
+
+Three things worth remembering:
+
+**The recursive CTE has to repeat.** SQL Server doesn't let one
+WITH clause cover multiple statements (each statement is its own
+batch in terms of the optimizer's view). The CTE definition gets
+duplicated across the UPDATE and DELETE statements; that's
+acceptable boilerplate. Alternatively, you could materialize the
+subtree IDs into a table variable / temp table first and use them
+across statements; for ≤10 nodes the duplicated CTE is simpler.
+
+**Walking via the parent's columns.** The recursive member is
+`n.id = s.path1_node_id OR n.id = s.path2_node_id` — it reads the
+*parent*'s path columns and follows them downward. The anchor
+member needs to include path1/path2 in its SELECT for the
+recursive member to reference them, even though those columns
+aren't used in the final UPDATE or DELETE.
+
+**The same CTE for counting.** The "you're about to delete N
+descendants" count for the dialog uses an even simpler version of
+the same CTE — just the `id` column, then `COUNT(*) - 1`. Once
+the CTE pattern is in place, every subtree operation gets cheap.
+
+Two upstream FKs to handle outside the subtree:
+  - `workflow_definitions.start_node_id` if it points inside the
+    subtree (defensive — Start delete is rejected at the top of
+    the method, so this is only hit on degenerate data).
+  - The upstream parent's `path1_node_id` or `path2_node_id` that
+    points at the subtree root. One UPDATE nulls it.
+
+Both fire BEFORE the subtree UPDATE/DELETE so no FK constraint
+sees an inconsistent state.
+
+## 2026-05-24 — One MudDialog, three branching shapes
+
+Chunk 9's delete confirmation has three logically distinct
+states:
+  - Terminal or childless Process: plain "Delete this node?" confirm.
+  - Process with descendants: two destructive buttons — splice
+    vs delete-subtree.
+  - Decision: warning copy ("both subtrees will be deleted, N
+    total descendants") + single destructive button.
+
+First instinct: three MudDialog components, each opened on its
+own bool flag. Got two-thirds of the way through and stopped —
+the three dialogs would have ~90% duplicated markup, three sets
+of cancel/confirm wiring, three state-bool pairs.
+
+Collapsed to one MudDialog whose title, body, and action buttons
+branch on a few state booleans:
+  - `_pendingDeleteIsDecision`
+  - `_pendingDeleteAllowsSplice` (Process with > 0 descendants)
+  - `_pendingDeleteDescendantCount`
+
+The branching in the Razor template is straightforward
+`@if (...) { ... } else if (...) { ... } else { ... }` — three
+visual variants, one component, one open/close lifecycle.
+
+**Pattern**: when you have N "different" dialogs that share a
+trigger pattern (some state populates → dialog opens → user picks
+→ handler fires → state clears), they're usually one dialog with
+content branching, not N dialogs. Save the separate-dialog
+approach for actually-different interactions (e.g. the
+Decision-which-side dialog from Chunk 7 is genuinely a different
+flow with different state, so it deserves its own component).
+
+The signal that you've collapsed too far: the dialog grows a
+fourth state flag, the conditionals nest more than two levels,
+or the title/body/buttons stop reading naturally as a coherent
+"thing." If any of those happen, split.
+
+## 2026-05-24 — RefreshAfterEditAsync as the shared post-edit helper
+
+Three call sites (InsertChildAsync success, DeleteAndSpliceAsync
+success, DeleteSubtreeAsync success) all needed the same
+three-step post-edit work:
+  1. Reload `_nodes` from the repo.
+  2. Re-mount the JS canvas with the updated graph.
+  3. `StateHasChanged()` to redraw the readout table.
+
+Started by inline-duplicating in InsertChildAsync (Chunk 7).
+Chunk 9's delete handlers needed the same thing, which prompted
+extraction:
+
+```csharp
+private async Task RefreshAfterEditAsync()
+{
+    _nodes = await NodeRepository.ListByWorkflowIdAsync(WorkflowId);
+    if (_module is not null)
+    {
+        try
+        {
+            await _module.InvokeVoidAsync(
+                "mount", CanvasSelector, BuildGraphPayload(), _dotNetRef);
+        }
+        catch (JSDisconnectedException)
+        {
+            // User navigated away. Nothing to do.
+        }
+    }
+    StateHasChanged();
+}
+```
+
+The `JSDisconnectedException` swallow is the only non-obvious
+part — the circuit may have dropped between the repo call and
+the JS interop call. Without the catch, the user-already-gone
+case logs a noisy unhandled exception.
+
+Future delete-related operations (e.g. a "clear workflow" wipe
+or a future "reset to template") slot into this same helper.
+
