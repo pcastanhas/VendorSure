@@ -4,7 +4,9 @@ VendorSure is an internal pre-MRI vendor verification system for a large real es
 
 ## Status
 
-Design substantially complete. Build starting (Phase 1).
+Phases 1-5 shipped. Foundation, identity admin, document catalog admin,
+Request Type editor, and Workflow Designer (including admin Blocks page)
+are functional. Phase 6 (AI Service + Storage + Submission Portal) is next.
 
 ## Documents
 

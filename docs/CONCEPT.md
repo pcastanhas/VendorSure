@@ -128,7 +128,10 @@ Where Compliance and admins configure the system. Gated by `user.is_admin = true
     points the admin toward the existing Draft or the Create-Draft
     button.
   - **Bottom: four tabs.**
-    - **Workflows** — placeholder until Phase 5 ships the designer.
+    - **Workflows** — list of workflows on the current version with
+      a "New workflow" button. Opens the workflow designer page on
+      a separate route. Editable on Draft; read-only otherwise.
+      Backed by the Phase 5 designer.
     - **Required Documents** — table of the document-type library
       with an Attached checkbox and Required switch per row. Toggling
       Attached calls the junction repo's Add/Remove; Required calls

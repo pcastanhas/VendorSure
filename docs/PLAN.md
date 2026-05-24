@@ -338,25 +338,69 @@ pivot in Chunk 7. The shipped sequence:
    removed. Inline incomplete-node badges deferred — the dashed
    dangling-edge cue from Chunk 7 is sufficient for our scale.
 
+9. **Post-Chunk-10 cleanup pass.** An extended polish pass turning
+   the chunk-10-complete state into a release-quality designer plus
+   the admin Blocks page. Threads:
+
+   - `block_catalog` schema enrichment: added `name nvarchar(50)`
+     (short label for picker + canvas), `path1_decision` /
+     `path2_decision` (block-level branch labels for Decision blocks,
+     enforced by `CK_block_catalog_decision_labels`), and `actor_type`
+     int (1=System / 2=Human / 3=AI, enforced by
+     `CK_block_catalog_actor_type`). Each landed with backfill SQL
+     in the commit message.
+   - Dropped dead `workflow_nodes.path1_prompt_text` /
+     `path2_prompt_text` columns — wrong layer once labels moved
+     onto `block_catalog`.
+   - Canvas polish: navigate to designer on workflow create; X
+     button moved to top-center; node ID labels removed; per-block
+     color from `block_catalog.color` with darkened-fill stroke;
+     Decision diamonds darkened to orange-800 with white text; path
+     decision labels rendered on Decision outgoing edges in neutral
+     muted grey (no red/green coding — see LessonsLearned 23);
+     actor-type icon (gear/person/robot SVG) prefixed to each
+     block-bearing node's label; native `<title>` tooltip replaced
+     by a custom MudBlazor-styled multi-line cursor-following
+     overlay.
+   - **Admin Blocks page at `/admin/blocks`.** Two tables
+     (Process / Decision) with color swatches, active toggle,
+     edit dialog with 4-swatch color picker per node type. Blocks
+     are never deleted, only deactivated. Class name is locked
+     from editing on blocks referenced by any workflow_node;
+     repo enforces with `RejectedClassNameChangeBlocked` if the UI
+     guard is bypassed. Repo grew authoring methods
+     (`ListAllAsync`, `GetByIdAsync`, `CreateAsync`, `UpdateAsync`,
+     `SetActiveAsync`, `CountWorkflowNodeReferencesAsync`) and
+     outcome enums. +18 new tests.
+
+   Final test surface for Phase 5: 220 tests, up from 158 at
+   Phase 5 start.
+
 ### Phase 5 doc commit
 
 - CONTINUE.md updated each chunk; final state reflects Chunks 1-10
-  done (Chunk 8 deferred).
-- CONCEPT.md §"Workflow designer" rewritten in the Chunk 7 commit to
-  reflect the +-button construction model and promotion-time
-  validation posture.
-- LessonsLearned.md grew substantially through Phase 5: ten new
-  entries covering the design pivot rationale, the recursive-CTE
+  done plus the post-Chunk-10 cleanup pass (Chunk 8 carried over).
+- CONCEPT.md §"Workflow designer" rewritten across Phase 5 (initial
+  pivot in Chunk 7, block-level decision-label model added during
+  cleanup) and is current.
+- LessonsLearned.md grew substantially through Phase 5: ten-plus
+  new entries covering the design pivot rationale, the recursive-CTE
   patterns and bugs, the MudBlazor popover-vs-dialog decision, the
-  schema-CHECK-vs-promotion-gate trade-off, and the post-mortem on
-  the orphan bug.
+  schema-CHECK-vs-promotion-gate trade-off, the orphan-bug post-
+  mortem, and (cleanup pass) the neutral-color rule for reused UI
+  elements.
 - PLAN.md (this file) — Phase 5 section updated to reflect what
   actually shipped.
 
 ### Outstanding from Phase 5 (carried forward, NOT blocking)
 
-- **Chunk 8 deferred.** Side-panel node property editor. Pickup
-  whenever it's actually needed.
+- **Chunk 8 — Node property editor (carried over).** Side-panel
+  UI to edit per-node prompt_text, approver_group_id,
+  stale_threshold_days, stale_message_text, notes. Repo support
+  already exists in `WorkflowNodeRepository.UpdateAsync`. Phase 6
+  prerequisite — engine needs prompts populated to run Human and
+  AI blocks meaningfully. Ship at start of Phase 6 or immediately
+  before.
 - **CI not wired.** Tests run on the developer's machine via
   `dotnet test`. A buggy Chunk 9 commit shipped because the test
   that should have caught the bug existed but apparently wasn't

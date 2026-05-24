@@ -4,119 +4,127 @@
 
 ## Where we are
 
-**Phase 5 complete.** Chunks 1-7, 9, and 10 done. Chunk 8 (node
-property editor) was deferred pending review of whether it's
-needed — `WorkflowNodeRepository.UpdateAsync` handles all the
-property fields, so the only missing piece is the side-panel UI.
+**Phase 5 complete.** Chunks 1-7, 9, and 10 shipped, followed by an
+extensive post-Chunk-10 cleanup pass. Chunk 8 (node property editor)
+remains deferred — `WorkflowNodeRepository.UpdateAsync` handles all
+the property fields, so the only missing piece is a side-panel UI.
 
-Chunk 7 was the design pivot from Chunk 6's "free drop palette"
-model to the +-button graph construction model; Chunk 9 added
-the matching deletion surface; Chunk 10 closed Phase 5 with
-promotion-time validation and end-of-phase rollup.
+The Phase 5 build sequence:
 
-  - Every workflow has a Start node, auto-created in
-    `WorkflowDefinitionRepository.CreateAsync` inside the same
-    transaction that creates the workflow row. The workflow ⇒
-    Start invariant.
-  - The JS module draws + buttons on every non-terminal node's
-    open slots (one for Start/Process, two for Decision).
-  - Clicking + opens a block-picker dialog (centered MudDialog;
-    we explored a popover anchored to the click point but
-    MudBlazor 9's popover portal pattern made it fragile).
-    Terminals are offered only when the slot is empty
-    (insert-between is invalid for terminals — they have no
-    children to take a displaced child).
-  - Inserting a Decision into a non-empty slot opens an extra
-    dialog: "Which side should <existing child> attach to?"
-  - New repo method `IWorkflowNodeRepository.InsertChildAsync`
-    atomically inserts + wires + renumbers (uses the existing
-    `RenumberSubtreeAsync` recursive CTE under the hood).
-  - The schema still permits orphan nodes (level=0, no upstream
-    FK); the UI doesn't create them under normal operation; the
-    promotion-time validator now refuses any workflow that has
-    them (Chunk 10).
-  - **Schema follow-up to Chunk 7**: `CK_workflow_nodes_decision_both_edges`
-    dropped. Chunk 10's promotion gate is the sole enforcer of
-    "every Decision has both children."
-  - **Chunk 9**: X (delete) buttons in the top-left of every
-    non-Start node, plus a confirmation dialog that branches:
-      - Terminal or childless Process: plain confirm.
-      - Process with descendants: splice into parent
-        (`DeleteAndSpliceAsync` lifts the single child up one
-        level, renumbers via existing CTE) or delete subtree
-        (`DeleteSubtreeAsync` recursively removes the node and
-        all descendants).
-      - Decision: single destructive button, no splice option
-        (two subtrees can't cleanly merge).
-    Start delete is blocked — the X button isn't even rendered
-    on Start.
-  - **Chunk 9 bug fix**: `DeleteSubtreeAsync` had a data-loss
-    bug — deleting a Decision left its children behind as
-    orphans. Two separate `ExecuteAsync` calls with the same
-    recursive CTE: the first nulled the FKs the second's walk
-    depended on. Fixed by materializing subtree IDs into a `@ids`
-    table variable in one batch. See LessonsLearned entry 20.
-  - **Chunk 10**: promotion-time validation in
-    `TransitionToInServiceAsync`. Refuses `Draft → InService`
-    when any workflow on the version has:
-      - a non-terminal node missing required children (Decision
-        needs both branches; Start/Process need path1),
-      - an orphan node (no incoming path FK, and not the
-        workflow's Start),
-      - a workflow with NULL start_node_id.
-    `TransitionToInServiceResult` promoted from enum to record
-    with `Outcome` + `Issues` list; UI surfaces the first three
-    issues in a sticky snackbar. End-of-phase rollup: removed the
-    temporary node-list readout below the canvas, updated
-    PLAN.md to reflect what actually shipped vs the provisional
-    chunk list, polished CONCEPT.md. Inline incomplete-node
-    badges deferred — the dashed dangling-edge cues from Chunk 7
-    are sufficient at our scale.
+- **Chunks 1-4** — Workflow definition / node / block catalog repos
+  plus the designer page shell.
+- **Chunk 5** — D3 interop spike. Pure-SVG canvas via D3 loaded from
+  a vendored npm dep. JS module renders the graph; Blazor owns the data.
+- **Chunk 6** — Palette + drag-to-add nodes. Effectively reverted by
+  Chunk 7's design pivot.
+- **Chunk 7 — Design pivot to +-button graph construction.** Every
+  workflow auto-creates a Start node in the workflow create
+  transaction. JS draws + buttons on every non-terminal node's open
+  slots; clicking + opens a block-picker dialog.
+  `IWorkflowNodeRepository.InsertChildAsync` atomically inserts +
+  wires + renumbers. Followed by a schema follow-up that dropped
+  `CK_workflow_nodes_decision_both_edges` (move "Decision has both
+  children" from edit-time to promotion-time).
+- **Chunk 9 — Delete affordances.** X (delete) button on every
+  non-Start node. Confirmation dialog branches on node type and
+  descendant count: terminal/childless-Process is plain confirm;
+  Process with descendants offers splice-into-parent
+  (`DeleteAndSpliceAsync` lifts single child up + renumbers) or
+  delete-subtree (`DeleteSubtreeAsync` recursive cascade); Decision
+  offers subtree-delete only; Start delete is blocked. Plus a bug
+  fix for the recursive CTE destroying its own walk data across two
+  ExecuteAsync calls. See LessonsLearned entry 20.
+- **Chunk 10 — Promotion-time validation + end-of-phase rollup.**
+  `TransitionToInServiceAsync` now refuses `Draft → InService` when
+  any workflow on the version has structural issues (non-terminal
+  node missing required children, orphan node, no Start).
+  `TransitionToInServiceResult` is now a record with `Outcome` +
+  `Issues` list; UI surfaces issues in a sticky snackbar.
 
-Test surface: 158 → 201 (+1 workflow def repo, +19 node repo
-Chunk 7, +15 node repo Chunk 9, +1 regression test for Chunk 9
-bug fix, +7 version repo Chunk 10).
+**Post-Chunk-10 cleanup pass (this session):**
 
-Phase 5 design settled before code (post-Chunk-7 shift):
-  - **D3.js** for the SVG canvas. No React, no build pipeline,
-    one npm dep vendored locally.
+A sustained polish pass turning the chunk-10-complete state into a
+release-quality workflow designer plus a new admin Blocks page. The
+core threads:
+
+- **`block_catalog` schema enrichment.** Added `name nvarchar(50)`
+  (short label for picker + canvas), `path1_decision` /
+  `path2_decision` (block-level branch labels for Decision blocks,
+  enforced by `CK_block_catalog_decision_labels`), and `actor_type`
+  (int enum: 1=System, 2=Human, 3=AI, enforced by
+  `CK_block_catalog_actor_type`). Each landed with backfill SQL in
+  the commit message and matching domain/repo/test changes.
+- **Dropped dead columns.** `workflow_nodes.path1_prompt_text` and
+  `path2_prompt_text` were the wrong layer once labels moved to
+  `block_catalog`. Removed from schema, domain, repo, and
+  `IWorkflowNodeRepository.UpdateAsync`.
+- **Canvas rendering polish.** Designer route now navigates to the
+  designer on workflow create (was returning to Workflows tab).
+  X-button moved to top-center (was top-left, blocking long block
+  names). Node ID labels (`#nn`) removed. Per-block color from
+  `block_catalog.color` rendered with darkened-fill-derived stroke.
+  Decision diamonds darkened to orange-800 with white text for
+  consistency with other node types. Block-level path labels
+  rendered on diamond outgoing edges in neutral muted grey (no
+  red/green coding — see LessonsLearned 23). Actor-type icon
+  (gear/person/robot SVG) prefixed to each block-bearing node's
+  label. Native `<title>` tooltip replaced by a custom MudBlazor-
+  styled multi-line hover overlay (immediate appearance, actor icon
+  + bold name on line 1, description on line 2, cursor-following).
+- **Admin Blocks page** at `/admin/blocks`. Two tables (Process /
+  Decision), color swatches, active toggle column, edit pencil.
+  Edit dialog with 4-swatch color picker per node type, actor radio,
+  conditional Decision-label fields, class_name locked from editing
+  on blocks referenced by any workflow_node. Repo grew authoring
+  methods to support this (`ListAllAsync`, `GetByIdAsync`,
+  `CreateAsync`, `UpdateAsync`, `SetActiveAsync`,
+  `CountWorkflowNodeReferencesAsync`) with new outcome enums.
+  Two-layer enforcement of the class_name-change rule: UI disables
+  the field when refs > 0; repo refuses with
+  `RejectedClassNameChangeBlocked` if a concurrent caller slips
+  through.
+- **Bug fix.** `UpdateAsync` was tripping the in-use-block check on
+  benign whitespace differences (dialog's `.Trim()` on save against
+  a stored value with trailing whitespace). Both sides now trimmed
+  before the equality check.
+
+**Test surface: 158 → 220.** Phase 5 baseline was 201 after Chunk 10;
+the cleanup pass added 19 more (mostly the new block-catalog repo
+methods) to reach 220.
+
+Phase 5 design (locked in by the end of the cleanup):
+  - **D3.js** for the SVG canvas. No React, no build pipeline.
   - **Fixed layout** computed from `execution_level` (vertical row)
-    + parent-driven horizontal slots (path1 = left, path2 = right
-    consistently). No `x`/`y` columns in the schema.
-  - **Graph rooted at Start** — every workflow has one and only
-    one Start, auto-created on workflow create. Graph grows from
-    Start via + buttons; no orphan nodes by construction.
-  - **Structural validity via UI affordances** — the schema CHECKs
-    are the safety net, but the UI doesn't let the user produce
-    structurally-invalid graphs in the first place.
-  - **Promotion-time validation** — Draft can hold half-wired
-    workflows; the `Draft → InService` transition refuses
-    workflows where any non-terminal node is missing required
-    children. (Implements Chunk 10.)
-  - **`execution_level`** = topological depth. Designer renumbers
-    downstream nodes on insert/delete; engine walks levels in
-    Phase 6+.
+    + parent-driven horizontal slots (path1 = left, path2 = right).
+  - **Graph rooted at Start** — every workflow has one and only one;
+    auto-created on workflow create.
+  - **Structural validity via UI affordances** — schema CHECKs are
+    safety net; UI doesn't let users produce invalid graphs.
+  - **Promotion-time validation** for Draft → InService.
+  - **`execution_level`** = topological depth; designer renumbers
+    downstream nodes on insert/delete.
   - **Branch merging deferred** — schema permits, editor refuses.
-  - **Workflows tab → list page** on the Request Type detail page.
-  - **Designer opens on a separate route**
-    `/admin/request-types/{typeId}/workflows/{workflowId}/designer`.
-  - **Auto-save per atomic edit.** Each insert/delete commits its
-    own transaction.
-  - **Block + artifact catalog seeded manually on dev DB** by the
-    user. Phase 5 code reads them as-is.
+  - **Block-level semantics.** A `block_catalog` row precodes the
+    actor (System/Human/AI), the predicate (for Decisions), and
+    the meanings of path1/path2 (for Decisions). The workflow author
+    picks blocks; they don't author block internals. Block authoring
+    is now admin-UI-driven (`/admin/blocks`) but block .NET classes
+    are still hand-coded.
+  - **Auto-save per atomic edit.** Each insert/delete/edit commits
+    its own transaction.
 
 Read these to get oriented:
-- `docs/PLAN.md` — the phase/chunk roadmap. **Next step is Phase 5
-  / Chunk 8 — node property editor.** PLAN's provisional Phase 5
-  chunk list was superseded by the design conversation; the
-  locked-in plan lives in the chat transcripts and on the commit
-  log.
+- `docs/PLAN.md` — the phase/chunk roadmap. Phase 5 is done;
+  next is Phase 6. PLAN's Phase 5 section reflects what shipped
+  (the provisional chunk list was superseded by the design
+  conversation, captured both there and in commit messages).
 - `docs/data-model.sql` — the reviewed schema.
-- `docs/CONCEPT.md` — design intent. §3.3 covers Settings, User Groups,
-  Users, Required Documents, and the Request Type editor in detail;
-  §3.1 and §3.2 still scheduled for refresh in Phase 6 / Phase 9.
+- `docs/CONCEPT.md` — design intent. The workflow designer section
+  was refreshed multiple times across Phase 5 and is current as of
+  the cleanup. §3.1 and §3.2 still scheduled for refresh in
+  Phase 6 / Phase 9.
 - `BUILD.md` — how to build/run locally. "What's currently built
-  (Phases 1-4)" summarises the shipped surface.
+  (Phases 1-5)" summarises the shipped surface.
 - `LessonsLearned.md` — twenty-three entries.
 - `docs/REMOVE-BEFORE-PROD.md` — debug identity shim cutover checklist.
 
@@ -206,45 +214,59 @@ and `dotnet test`, reports back.
 ## Suggested next session
 
 **Phase 5 is complete.** Next is **Phase 6 — AI Service + Storage +
-Submission Portal**, per `docs/PLAN.md`. Phase 6 is also large
-and the chunk list there is provisional. Read the Phase 6 section
-in PLAN.md to start the design conversation before code.
+Submission Portal**, per `docs/PLAN.md`. Phase 6 is also large and
+the chunk list there is provisional. Read the Phase 6 section in
+PLAN.md to start the design conversation before code.
 
-A few items from Phase 5 are deliberately left open and worth
-deciding on before or during early Phase 6:
+### Top of the TODO list for next session
 
-**Chunk 8 — Node property editor (deferred from Phase 5).**
+In rough priority order:
 
-Side panel that lets users set prompt_text, approver_group_id,
-stale_threshold_days, stale_message_text, notes on individual
-nodes. The repo's `UpdateAsync` already handles all these fields;
-what's missing is purely UI:
-  - Body-click handler on each node `<g>` in the JS module.
-  - `[JSInvokable] OnNodeClickedAsync(nodeId)` opens a side panel.
-  - Field shape depends on node type (Decision shows path1/path2
-    prompts; non-Decision shows only the single prompt).
-  - Auto-save on blur (locked design).
-  - Selected-node visual highlight on the canvas.
+1. **Open the Phase 6 design conversation.** Phase 6 introduces the
+   submission portal (submitter-facing UI), document storage
+   abstraction (`IDocumentStorage`, `LocalDiskDocumentStorage`),
+   Anthropic SDK wiring, the AI Service, and the workflow engine
+   itself. Lock in scope and chunk order before any code, the way
+   Phase 5 was settled in conversation before Chunk 7.
 
-If we don't ship this, every node uses default values until
-someone edits the DB rows directly. The workflow engine in Phase
-6 still runs, but every Process prompt will be empty and every
-approver group will be null. That's probably not viable for v1;
-plan to pick this up early in Phase 6 if it isn't done first.
+2. **Chunk 8 — Node property editor (carried over from Phase 5).**
+   Side panel that lets users set `prompt_text`,
+   `approver_group_id`, `stale_threshold_days`, `stale_message_text`,
+   `notes` on individual nodes. The repo's `UpdateAsync` already
+   handles all these fields; what's missing is purely UI:
+   - Body-click handler on each node `<g>` in the JS module
+     (currently the body has only the hover-tooltip handlers).
+   - `[JSInvokable] OnNodeClickedAsync(nodeId)` opens a MudDrawer
+     side panel.
+   - Field shape depends on node type. For Human-actor blocks the
+     `prompt_text` is the question the approver sees; for
+     System/AI it's typically unused. Path labels live on
+     `block_catalog` (not the node), so the side panel doesn't
+     touch them.
+   - Auto-save on blur, the way the rest of Phase 5 saves.
+   - Selected-node visual highlight on the canvas.
 
-**CI not wired.** Tests run on the developer's machine via
-`dotnet test`. A buggy Chunk 9 commit shipped because the test
-that should have caught the bug existed but apparently wasn't
-executed before commit. Wiring even a minimal GitHub Action that
-runs `dotnet build` + `dotnet test` on push would prevent this
-class of failure. The infrastructure tests require a live DB
-connection so CI also needs a SQL Server (LocalDB? containerized
-SQL? Azure SQL test instance?) — non-trivial but worth scoping.
+   This is a Phase 6 prerequisite: without it, the engine has no
+   per-node prompts to surface to human approvers or pass to AI
+   blocks. Plan to ship Chunk 8 as the first thing in Phase 6 or
+   immediately before it.
 
-**Inline incomplete-node badges.** Skipped in Chunk 10 because
-the dashed-dangling-edge cues from Chunk 7 are visible enough at
-our scale. If a busier-canvas workflow shows up where the eye
-can't easily spot dashed lines, add the yellow `!` badge then.
+3. **Wire CI.** Tests run on the developer's machine via
+   `dotnet test`. A buggy Chunk 9 commit shipped because the test
+   that should have caught the bug existed but apparently wasn't
+   executed before commit. Wiring a minimal GitHub Action that runs
+   `dotnet build` + `dotnet test` on push would prevent that class
+   of failure. Infrastructure tests require a live DB, so CI also
+   needs a SQL Server target (LocalDB on a Windows runner?
+   containerized SQL? Azure SQL test instance?) — scope this when
+   we get to it.
+
+### Carried-forward items, not blocking
+
+**Inline incomplete-node badges.** Skipped in Chunk 10 because the
+dashed-dangling-edge cues from Chunk 7 are visible enough at our
+scale. If a busier-canvas workflow shows up where the eye can't
+easily spot dashed lines, add the yellow `!` badge then.
 
 **Dev DB cleanup.** Pre-Chunk-7 workflows may have leftover orphan
 nodes that the new promotion gate will refuse. One-time cleanup
@@ -272,6 +294,18 @@ WHERE n.id <> ISNULL(wd.start_node_id, -1)
     WHERE p.workflow_definition_id = n.workflow_definition_id
       AND (p.path1_node_id = n.id OR p.path2_node_id = n.id)
   );
+```
+
+**Whitespace-padded class_name backfill (optional).** During the
+cleanup pass we fixed `UpdateAsync` to ignore whitespace-only
+differences in `block_catalog.class_name`. If any rows still have
+trailing whitespace from legacy data, one editing pass through the
+admin UI fixes them automatically; bulk cleanup is also fine:
+
+```sql
+UPDATE dbo.block_catalog
+SET class_name = LTRIM(RTRIM(class_name))
+WHERE class_name <> LTRIM(RTRIM(class_name));
 ```
 
 PAT note: each session, user provides a short-lived PAT for the repo.

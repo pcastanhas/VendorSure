@@ -13,9 +13,9 @@
   table on the first request; both need to work for the app to come up
   signed in.
 
-## What's currently built (Phases 1-4)
+## What's currently built (Phases 1-5)
 
-End-to-end surface as of the Phase 4 rollup:
+End-to-end surface as of the Phase 5 rollup:
 
 **Foundation (Phase 1):**
 
@@ -77,8 +77,8 @@ End-to-end surface as of the Phase 4 rollup:
      Draft" button (when no Draft exists). The transition buttons are
      the visible face of `TransitionToInServiceAsync` and
      `CreateDraftAsync`.
-  3. **Four tabs** — Workflows (placeholder until Phase 5), Required
-     Documents, Validations, Selection Prompt.
+  3. **Four tabs** — Workflows, Required Documents, Validations,
+     Selection Prompt.
 - **Required Documents tab** — table of library entries × attachment
   state per version. Toggle attached/required; read-only when the
   displayed version isn't Draft.
@@ -94,7 +94,54 @@ End-to-end surface as of the Phase 4 rollup:
   `superseded_ts` set, and the new version is promoted with
   `placed_in_service_ts` set, both using the same DateTime value so
   the audit timestamps line up exactly. UPDLOCK on the initial Draft
-  check serialises concurrent promotion attempts.
+  check serialises concurrent promotion attempts. The transition now
+  also runs structural validation across every workflow on the version
+  (added in Phase 5 / Chunk 10) — promotion is refused if any workflow
+  has a non-terminal node missing required children, an orphan node,
+  or no Start. Rejection surfaces the first few issues in a sticky
+  snackbar.
+
+**Workflow Designer (Phase 5):**
+
+- **Workflows tab** on the Request Type detail page lists the
+  workflows on the current version. New / Edit / Delete in-place
+  on Draft versions; read-only on Superseded / In Service.
+- **Workflow Designer page** at
+  `/admin/request-types/{typeId}/workflows/{workflowId}/designer` —
+  pure-SVG canvas via D3 in a vendored JS module
+  (`wwwroot/js/workflow-designer.js`), Blazor owns the data.
+  Created workflows auto-receive a Start node; the user grows the
+  graph from Start by clicking + buttons on every non-terminal
+  node's open slots. + opens a block picker dialog filtered by the
+  slot's allowed node types; selecting a block calls
+  `IWorkflowNodeRepository.InsertChildAsync` which atomically
+  inserts the node, wires the parent edge, and renumbers
+  downstream `execution_level` via a recursive CTE.
+- **Node body** shows the block's name (from `block_catalog.name`)
+  with a small actor-type icon prefix (gear/person/robot for
+  System/Human/AI). Hover shows a multi-line tooltip with the
+  block's description. Per-block color override via
+  `block_catalog.color` honored; otherwise node-type defaults
+  apply (Process blue, Decision orange).
+- **Decision diamonds** carry path1/path2 labels lifted from
+  `block_catalog.path1_decision` / `path2_decision` — block-level
+  semantics rendered on the horizontal edges leaving each vertex
+  in neutral muted grey.
+- **X delete button** in the top middle of every non-Start node
+  opens a confirmation dialog that branches on node type and
+  descendant count: terminal/childless-Process is plain confirm;
+  Process with descendants offers splice-into-parent
+  (`DeleteAndSpliceAsync`) or delete-subtree (`DeleteSubtreeAsync`);
+  Decision offers subtree-delete only.
+- **Admin Blocks page** at `/admin/blocks` — admin UI over
+  `block_catalog`. Two tables (Process / Decision), each with a
+  color swatch, name, description, actor, path labels (Decision
+  only), and active toggle. Blocks are never deleted, only
+  deactivated. Edit dialog uses a 4-swatch color picker per node
+  type. Class name is locked from editing on blocks that are
+  referenced by any workflow_node (admin must deactivate and
+  create a new block with the new class). Repo enforces the same
+  rule (`UpdateBlockCatalogOutcome.RejectedClassNameChangeBlocked`).
 
 ## First-time setup
 
