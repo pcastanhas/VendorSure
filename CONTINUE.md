@@ -14,8 +14,10 @@ superseded by a +-button graph-construction model):
     Start invariant.
   - The JS module draws + buttons on every non-terminal node's
     open slots (one for Start/Process, two for Decision).
-  - Clicking + opens a block-picker popover anchored to the click
-    point. Terminals are offered only when the slot is empty
+  - Clicking + opens a block-picker dialog (centered MudDialog;
+    we explored a popover anchored to the click point but
+    MudBlazor 9's popover portal pattern made it fragile).
+    Terminals are offered only when the slot is empty
     (insert-between is invalid for terminals — they have no
     children to take a displaced child).
   - Inserting a Decision into a non-empty slot opens an extra
@@ -26,6 +28,13 @@ superseded by a +-button graph-construction model):
   - The schema still permits orphan nodes (level=0, no upstream
     FK); the UI just doesn't create them. Old workflows from the
     Chunk 6 surface that have orphans are dev artifacts.
+  - **Schema follow-up**: `CK_workflow_nodes_decision_both_edges`
+    dropped (a Decision used to require both path FKs at insert
+    time). Chunk 10's promotion gate is now the sole enforcer
+    of "every Decision has both children." Defense-in-depth at
+    the data layer is gone for this rule; the cost was a hard
+    block on the new model, since Decisions necessarily exist
+    with one or zero children mid-design.
 
 Test surface: 158 → 178 (+1 workflow def repo, +19 node repo).
 
@@ -69,7 +78,7 @@ Read these to get oriented:
   §3.1 and §3.2 still scheduled for refresh in Phase 6 / Phase 9.
 - `BUILD.md` — how to build/run locally. "What's currently built
   (Phases 1-4)" summarises the shipped surface.
-- `LessonsLearned.md` — fifteen entries.
+- `LessonsLearned.md` — sixteen entries.
 - `docs/REMOVE-BEFORE-PROD.md` — debug identity shim cutover checklist.
 
 ## Approach rules (locked in during design)
@@ -157,45 +166,84 @@ and `dotnet test`, reports back.
 
 ## Suggested next session
 
-**Phase 5 / Chunk 7 — Edge drawing (wire path1/path2 via UI).**
+**Phase 5 / Chunk 8 — Node property editor.**
 
-Second write path from the designer. Goal: drag from one node's
-output handle to another node's input handle to set `path1_node_id`
-(or `path2_node_id` for Decisions).
+Side panel that opens when the user clicks a node body (not a +
+button). Reads the node's editable properties and lets the user
+update them. Properties on `workflow_node` per the schema:
+  - prompt_text, path1_prompt_text, path2_prompt_text
+  - approver_group_id (FK to approver_groups, when seeded)
+  - stale_threshold_days, stale_message_text
+  - notes
 
 Scope:
-  - JS module: add small output handles to each non-terminal node
-    (one for Start/Process, two for Decision — visibly distinct so
-    the user knows which is path1 vs path2). Terminal nodes get no
-    output handles (they have no out-edges).
-  - HTML5 drag from a handle to a node target. The dataTransfer
-    payload carries `{sourceNodeId, slot}` where slot ∈
-    {"path1","path2"}. On drop on a node body, the JS module calls
-    a new `[JSInvokable] OnEdgeDropAsync(sourceId, targetId, slot)`.
-  - Blazor: route to `IWorkflowNodeRepository.SetPath1Async` or
-    `SetPath2Async` from Chunk 3 — which already handles renumbering
-    via the recursive CTE. On success, reload + re-mount.
-  - Result-enum handling: most cases are silent success, but the
-    no-merging rule (target already has an incoming edge from
-    another parent) needs a clear Snackbar message; same for
-    self-loop attempts and same-version invariant violations
-    if those can fire here.
+  - JS module: add a body-click handler on each node `<g>`. On
+    click, call a new `[JSInvokable] OnNodeClickedAsync(nodeId)`.
+    Distinguish from + clicks by stopping propagation on the +
+    button (already done in Chunk 7).
+  - Razor: a `MudDrawer` or `MudCard` panel on the right side
+    that becomes visible when a node is selected. Loads
+    `_selectedNode` via `NodeRepository.GetByIdAsync(nodeId)`.
+    Fields per the node's type (Decision shows path1/path2
+    prompt text; non-Decision shows only prompt_text). Approver
+    group dropdown if the seeded `approver_groups` table has
+    rows (otherwise hide).
+  - Auto-save on blur per the locked design: each field commits
+    via `UpdateAsync` when focus leaves. Snackbar on save.
+  - Visual cue on the canvas: the selected node gets a thicker
+    stroke or a glow. JS module reads a `selectedNodeId` from
+    the graph data payload to know which node to highlight.
 
-Likely catches:
-  - The JS module's render needs invalidation so handles re-attach
-    after a re-mount. Currently mount() rebuilds the SVG from scratch,
-    so handles get re-created — good.
-  - Drag from a handle reaches both the canvas's `drop` listener
-    and the target node's listener. Pick one: probably the canvas's,
-    since the JS module is the one that knows which node was under
-    the cursor (via event.target / `closest()`). The palette drop
-    listener stays — it distinguishes palette vs edge drags by
-    inspecting `dataTransfer.types`.
+No schema changes. `UpdateAsync` already shipped in Chunk 3 and
+handles all the property fields.
 
-No new repo work (Chunk 3 already shipped the wiring methods).
-The new tests, if any, live alongside the JS module — but per the
-established pattern, JS interop is exercised manually on the dev
-machine, not unit-tested. The repository tests already cover all
-the renumber cases.
+**Chunk 9 — Delete affordances.**
+
+Per the design conversation: terminal delete is confirm-only,
+Process delete asks "keep descendants — splice into parent" or
+"delete this and N descendants," Decision delete is a single
+warning ("Delete this Decision and both subtrees, N total
+descendants?" — no splice option). Start delete is blocked.
+
+New repo methods needed:
+  - `DeleteSubtreeAsync(rootNodeId)`: recursive CTE to find all
+    descendants reachable via path1/path2; null upstream parent
+    FK; delete the subtree in dependency order; delete root.
+  - `DeleteAndSpliceAsync(nodeId)`: only valid for single-child
+    nodes (Start, Process). Read the node's path1 (= surviving
+    child). Update parent's pointer to skip the deleted node.
+    Delete the node. Renumber the surviving subtree (shift up
+    by 1) via the existing `RenumberSubtreeAsync` CTE.
+
+The existing `DeleteAsync` from Chunk 3 stays as the leaf-only
+primitive (no splice, no subtree). Tests for it still apply.
+
+**Chunk 10 — Promotion-time validation.**
+
+The version's `Draft → InService` transition
+(`RequestTypeVersionRepository.TransitionToInServiceAsync` from
+Phase 4) must refuse promotion when any workflow on the version
+has a malformed graph: every non-terminal node must have its
+required children present.
+
+Required because the schema CHECK that used to enforce
+"every Decision has both path1 and path2 set" was dropped in
+Chunk 7's bug-fix follow-up. Defense-in-depth is gone at the
+data layer; the promotion gate is now the sole enforcer.
+
+Concretely:
+  - SQL pre-check in `TransitionToInServiceAsync`: count
+    Decisions with NULL path1 or path2, AND count Start/Process
+    nodes with NULL path1 (Decision is excluded because Decision
+    is a per-slot rule). If any → return a new outcome enum
+    value (`RejectedIncompleteWorkflow` or similar) with the
+    offending workflow names attached.
+  - Inline incomplete-badge rendering on the canvas (the
+    designer-page side): the JS module shows a small yellow !
+    on any node missing its required children. Helps the user
+    fix things before trying to promote.
+  - End-of-phase rollup: PLAN doc, CONCEPT polish, ad-hoc
+    cleanup of any temp UI affordances (the node-list readout
+    table below the canvas can probably go in this chunk).
 
 PAT note: each session, user provides a short-lived PAT for the repo.

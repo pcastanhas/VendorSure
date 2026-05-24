@@ -354,10 +354,16 @@ CREATE TABLE [dbo].[workflow_nodes] (
         CHECK ([node_type_id] NOT IN (4,5,6) OR ([path1_node_id] IS NULL AND [path2_node_id] IS NULL)),
     -- Process and Start nodes have exactly one out-edge (path1).
     CONSTRAINT [CK_workflow_nodes_process_single_edge]
-        CHECK ([node_type_id] NOT IN (1,2) OR [path2_node_id] IS NULL),
-    -- Decision nodes have two out-edges (both required).
-    CONSTRAINT [CK_workflow_nodes_decision_both_edges]
-        CHECK ([node_type_id] <> 3 OR ([path1_node_id] IS NOT NULL AND [path2_node_id] IS NOT NULL))
+        CHECK ([node_type_id] NOT IN (1,2) OR [path2_node_id] IS NULL)
+    -- NOTE: a CK_workflow_nodes_decision_both_edges constraint used to
+    -- live here, requiring Decision nodes to have BOTH path1 AND path2
+    -- set at insert time. The Phase 5 / Chunk 7 design shift moved
+    -- "every Decision has both children" from edit-time enforcement to
+    -- promotion-time validation (Draft → InService refuses any
+    -- workflow with an incomplete Decision). Draft state legitimately
+    -- holds Decisions with one or zero children while the designer is
+    -- working. If you're regenerating this schema and adding it back,
+    -- you'll break the designer.
 );
 GO
 

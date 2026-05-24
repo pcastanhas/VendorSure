@@ -678,3 +678,63 @@ benefit at 10% of the friction. Same with the `CreateAsync` vs
 the high-level op gave both clear names and clear semantics,
 where overloading one would have made every call site harder to
 read.
+
+## 2026-05-24 — Edit-time schema CHECKs can become inconsistent with a design that allows mid-edit incompleteness
+
+Phase 5 / Chunk 7 follow-up. Hit on first attempt to insert a
+Decision node: `CK_workflow_nodes_decision_both_edges` violation.
+The constraint required Decisions to have BOTH path1 AND path2
+set at insert time — a stricter posture than the new
++-button construction model, where Decisions necessarily exist
+with one or zero children while the designer is working.
+
+The constraint was written before the Chunk 7 design conversation
+that moved "every Decision has both children" from edit-time to
+promotion-time validation. Once the design walked away from
+edit-time validation, the CHECK became a hard block on the new
+model, not a safety net.
+
+Dropped. The promotion gate (Chunk 10's
+`TransitionToInServiceAsync` work) is now the sole enforcer of
+the rule. Defense-in-depth at the data layer is gone for this
+specific invariant; that's the cost of moving incompleteness
+from "bug" to "expected mid-edit state."
+
+**Worth checking when shifting validation timing:**
+  - Which schema CHECKs were written assuming the strict posture?
+  - Which of them assumed "if it's in the DB, it's complete"?
+  - Which can stay (real type invariants like "terminals have no
+    out-edges") and which have to go (completeness invariants
+    that the new model needs to violate)?
+
+I kept `CK_workflow_nodes_terminal_no_edges` and
+`CK_workflow_nodes_process_single_edge` — both enforce real type
+invariants ("Process doesn't have a second slot to use",
+"terminals have no out-edges"), not completeness. Only the
+completeness one had to go.
+
+**Leave a tombstone in the schema file**, not a clean delete. The
+`data-model.sql` now has a comment where the constraint was
+explaining when and why it was dropped, with a "if you're
+regenerating this schema and adding it back, you'll break the
+designer" warning. Without context, a future contributor might
+"fix" the missing check by reading the flowchart and reintroduce
+the bug.
+
+**General principle.** When a design shift makes a previously-
+sensible invariant inconsistent, the data layer's defense-in-
+depth and the application's design coherence pull in opposite
+directions. Default to the design — the data layer's job is to
+serve the model, not the other way around. Just be honest about
+what you've given up: write it down in the schema, in
+LessonsLearned, and in the next-chunk plan for the validator
+that's now load-bearing.
+
+**This is the second invariant Chunk 7 moved out of the data
+layer.** The first was "orphan nodes can't exist" — schema still
+permits them, UI just doesn't create them. The second is "every
+Decision has both children" — schema permits one or zero, UI
+won't promote to InService without two. Both moves follow the
+same pattern: trust the UI to enforce structure in normal use,
+trust the promotion gate to refuse degenerate workflows, and
+let the schema be relaxed enough not to fight either.
