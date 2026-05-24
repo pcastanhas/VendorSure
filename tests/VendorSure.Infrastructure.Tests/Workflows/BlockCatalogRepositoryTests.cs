@@ -491,6 +491,61 @@ public sealed class BlockCatalogRepositoryTests
         }
     }
 
+    [Fact]
+    public async Task UpdateAsync_allows_color_change_when_class_name_differs_only_in_whitespace()
+    {
+        // Regression test for a bug surfaced via the admin UI: when a
+        // block_catalog row's class_name has trailing whitespace (from
+        // legacy data or a poorly-trimmed seed), the dialog's
+        // _className.Trim() on save makes the submitted ClassName
+        // differ from the stored one. The repo used to interpret that
+        // as a class_name change and refuse the update if the block
+        // was in use — even when the user only changed the color.
+        //
+        // Fix: compare trimmed values in UpdateAsync's in-use check.
+        // This test seeds a block with trailing whitespace in its
+        // class_name AND a referencing workflow_node (so the in-use
+        // check would fire if the comparison failed), then submits
+        // a color change with a trimmed class_name. Must succeed.
+        var prefix = "_test_bc_" + Guid.NewGuid().ToString("N");
+        var blockIds = new List<int>();
+        var typeIds = new List<int>();
+        try
+        {
+            var blockId = await InsertBlockAsync(
+                nodeTypeId: 2, name: $"{prefix}_ws", description: "ws-tolerant",
+                className: "VendorSure.Test.WhitespaceClass   ", // trailing whitespace
+                isActive: true, color: null);
+            blockIds.Add(blockId);
+
+            var typeId = await InsertRequestTypeAsync(prefix);
+            typeIds.Add(typeId);
+            await InsertWorkflowWithProcessNodeAsync(typeId, blockId);
+
+            // User edits color; dialog trims class_name on save. The
+            // comparison must not see this as a class_name change.
+            var edited = (await _catalog.GetByIdAsync(blockId))! with
+            {
+                ClassName = "VendorSure.Test.WhitespaceClass", // no trailing ws
+                Color = "#abcdef",
+            };
+
+            var result = await _catalog.UpdateAsync(edited);
+            Assert.Equal(UpdateBlockCatalogOutcome.Updated, result);
+
+            var fetched = await _catalog.GetByIdAsync(blockId);
+            Assert.Equal("#abcdef", fetched!.Color);
+            // class_name written through with the trimmed value;
+            // acceptable since the comparison treated them as equal.
+            Assert.Equal("VendorSure.Test.WhitespaceClass", fetched.ClassName);
+        }
+        finally
+        {
+            await CleanupWorkflowChainAsync(typeIds);
+            await CleanupAsync(blockIds);
+        }
+    }
+
     // ==== SetActiveAsync ==================================================
 
     [Fact]

@@ -174,7 +174,19 @@ internal sealed class BlockCatalogRepository : IBlockCatalogRepository
             // If class_name is changing, refuse when any workflow_nodes
             // row references this block. The admin must deactivate and
             // create a new row with the new class_name instead.
-            if (!string.Equals(current.ClassName, edited.ClassName, StringComparison.Ordinal))
+            //
+            // Compare trimmed values: trailing whitespace in either the
+            // stored row or the submitted edit is semantically meaningless
+            // for a .NET type name, so a difference only in whitespace
+            // shouldn't trigger the in-use check. Without this, an admin
+            // editing color (or anything else) on a block whose stored
+            // class_name has trailing whitespace gets a misleading
+            // "can't change class name" error because the dialog's
+            // Trim() on save makes the submitted value differ from
+            // the stored one.
+            var currentClass = (current.ClassName ?? string.Empty).Trim();
+            var editedClass = (edited.ClassName ?? string.Empty).Trim();
+            if (!string.Equals(currentClass, editedClass, StringComparison.Ordinal))
             {
                 var refCount = await connection.ExecuteScalarAsync<int>(
                     new CommandDefinition(
