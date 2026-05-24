@@ -4,15 +4,17 @@
 
 ## Where we are
 
-**Phase 5 in progress.** Chunks 1-4 done (`WorkflowDefinition`
-repository + Workflows tab + `WorkflowNode` repository + designer
-page shell). The designer route the Workflows tab navigates to
+**Phase 5 in progress.** Chunks 1-5 done. The designer route
 (`/admin/request-types/{typeId}/workflows/{workflowId}/designer`)
-now resolves: loads workflow + version + type + nodes via the
-repos, renders a breadcrumb + state-aware header + an empty
-`<div id="workflow-canvas">` placeholder + a temporary
-node-list readout table for development feedback. Next: Chunk 5
-(D3 interop spike — first JS interop in the codebase).
+now renders the workflow graph as an SVG via D3 inside the canvas
+div. D3 v7.9.0 is vendored locally at `wwwroot/lib/d3.v7.min.js`
+(CDN was rejected — sandbox couldn't reach jsdelivr, and an
+internal corporate env might be firewall-restricted too). The
+designer is read-only: shapes per node type (oval / rectangle /
+diamond), edges drawn via `d3.linkVertical()` from path1/path2
+FKs, layout = even-spread per `execution_level` row. No drag,
+no zoom, no click handlers. Next: Chunk 6 (palette + drag-to-add
+nodes, the first write path from the designer).
 
 Phase 5 design settled before code:
   - **D3.js** for the SVG canvas. No React, no build pipeline,
@@ -34,10 +36,10 @@ Phase 5 design settled before code:
 
 Read these to get oriented:
 - `docs/PLAN.md` — the phase/chunk roadmap. **Next step is Phase 5
-  / Chunk 5 — D3 interop spike.** PLAN's provisional Phase 5
-  chunk list was superseded by the design conversation (see Where
-  We Are above); the locked-in plan lives in the previous chat
-  transcript and on the commit log.
+  / Chunk 6 — palette + drag-to-add nodes.** PLAN's provisional
+  Phase 5 chunk list was superseded by the design conversation
+  (see Where We Are above); the locked-in plan lives in the
+  previous chat transcript and on the commit log.
 - `docs/data-model.sql` — the reviewed schema.
 - `docs/CONCEPT.md` — design intent. §3.3 covers Settings, User Groups,
   Users, Required Documents, and the Request Type editor in detail;
@@ -132,42 +134,35 @@ and `dotnet test`, reports back.
 
 ## Suggested next session
 
-**Phase 5 / Chunk 5 — D3 interop spike.**
+**Phase 5 / Chunk 6 — Palette + drag-to-add nodes.**
 
-The riskiest chunk in Phase 5. First JS interop in the codebase
-and first non-trivial JS file. Goal: D3 renders a graph inside the
-`<div id="workflow-canvas">` placeholder Chunk 4 already provides.
+First write path from the designer. Adds a left rail with
+draggable items:
+  - Fixed entries: Start, Decision, Approved, Rejected, Cancelled
+    (one per node type that doesn't need a block).
+  - Dynamic entries: one Process item per active `block_catalog`
+    row, grouped by Process (and eventually Decision if a Decision
+    block ever needs config).
 
-Scope:
-  - One `workflow-designer.js` file under
-    `src/VendorSure.UI/wwwroot/js/`. References D3 from a CDN
-    (probably `https://cdn.jsdelivr.net/npm/d3@7/dist/d3.min.js`,
-    pinned version).
-  - A small `IJSObjectReference`-based module that the designer page
-    instantiates on first render. The module owns the canvas div
-    completely (Blazor never re-renders inside it — see
-    LessonsLearned about Blazor + D3).
-  - Blazor pushes the graph in via a JS function call:
-    `module.invokeMethodAsync('mount', { nodes, edges })`.
-    Eventually JS will call back into Blazor; not in this chunk.
-  - Render: each node as a shape per type (oval / rectangle /
-    diamond / terminal-oval) with the seeded color; edges drawn
-    as curves via `d3.linkVertical()` from path1/path2 FKs.
-  - Layout: fixed, computed from `execution_level` (vertical row)
-    + parent-driven horizontal slot (path1 = left, path2 = right
-    for Decisions; insertion order otherwise). The layout function
-    lives in JS and is dumb — no force simulation, no animation.
-  - Read-only in this chunk. No drag, no zoom, no click handlers.
-    Just rendering.
+Dragging an entry onto the canvas:
+  - JS module handles the drag (D3 has built-in drag support).
+  - On drop, JS calls back into Blazor via a `DotNetObjectReference`
+    instance attached during mount(). The Blazor method calls
+    `IWorkflowNodeRepository.CreateAsync` from Chunk 3.
+  - CreateAsync inserts at level=0 with null path FKs (the engine
+    treats unwired nodes as orphans — see Chunk 3 result enums).
+  - On success, refresh `_nodes` via `ListByWorkflowIdAsync` and
+    call `module.mount(...)` again to re-render.
 
-Likely catches:
-  - Blazor Server's render-diff fighting with D3's DOM mutations.
-    Fix: the canvas div has `@key` or a static element ref and
-    Blazor never re-renders inside it after the initial mount.
-  - First-render timing — Blazor's `OnAfterRenderAsync(firstRender)`
-    is the right hook to mount D3 from.
-  - D3 v7 vs v6 API differences (selection.enter() / data() pattern).
-
-Wires to Chunk 4's loaded `_nodes` collection. No new repo work.
+Why this is non-trivial:
+  - First JS→Blazor callback (Chunk 5 was Blazor→JS only).
+  - First write path from the designer end-to-end:
+    drag → drop → JS callback → Blazor method → repo → DB → reload → re-render.
+  - The `DotNetObjectReference` lifecycle needs care — must be
+    disposed when the page navigates away, or it leaks.
+  - The block_catalog table doesn't exist yet in the data model.
+    Chunk 6 might need to seed a `block_catalog` table first
+    (probably manually on dev DB per the design conversation;
+    NOT in the repo per Q7 — block/artifact catalog is dev-seeded).
 
 PAT note: each session, user provides a short-lived PAT for the repo.

@@ -418,3 +418,64 @@ transaction, in specificity order. The probes can race with their own
 window but the answer doesn't matter — "X doesn't exist anymore" and
 "X exists but state is wrong" are both legitimate observations of
 the post-failure world.
+
+## 2026-05-24 — D3.js: vendor locally, load UMD via script tag, render in OnAfterRenderAsync
+
+Phase 5 / Chunk 5. First JS interop in the codebase. Lessons:
+
+**Vendor over CDN.** The agent's sandbox couldn't reach `cdn.jsdelivr.net`
+(egress allowlist blocks it). The user's dev environment is internal and
+might be similarly constrained behind a corporate firewall. The npm
+registry was reachable (`registry.npmjs.org` is on the allowlist), so we
+pulled `d3@7.9.0` and committed `wwwroot/lib/d3.v7.min.js` (~280KB).
+This pattern is worth following for any future third-party JS: if it's
+not already vendored, prefer pulling the tarball from npm to declaring a
+CDN reference. CDN convenience isn't worth a brittle dev experience for
+the user, and 280KB once in git is fine.
+
+**UMD loaded via <script>, module logic as ES module.** D3's distribution
+file is a UMD bundle — it sniffs the environment and attaches to `window.d3`
+when there's no module loader. ES `import` of the UMD file doesn't give
+you a usable export, so the practical pattern is:
+  - `<script src="lib/d3.v7.min.js">` in App.razor body — exposes
+    `window.d3` globally before any Razor page initializes.
+  - The page-specific JS file is an ES module that reads `window.d3`
+    and exports its own functions. The page imports it via
+    `IJSRuntime.InvokeAsync<IJSObjectReference>("import", "./js/...")`.
+
+This gives the best of both: ES module discipline for our code, simple
+script-tag inclusion for the third-party library.
+
+**Mount in `OnAfterRenderAsync`, guard on data-ready flags.** The first
+`OnAfterRenderAsync(firstRender: true)` fires after the FIRST render —
+which, for a page with an async `OnParametersSetAsync`, is the loading-
+spinner render. The canvas div doesn't exist yet. Don't gate on
+`firstRender` alone. Gate on the data-ready flag (`!_loading &&
+_loadError is null && _workflow is not null`) plus a `_mounted`
+boolean to prevent re-mount on subsequent renders. Subsequent
+`OnAfterRenderAsync(firstRender: false)` calls are how the mount
+actually happens.
+
+**Reset `_mounted` in LoadAsync to support param changes.** If the
+component is reused for different route params (same page, new
+WorkflowId), `OnParametersSetAsync` runs again. Setting `_mounted =
+false` at the top of LoadAsync, combined with `@key="_workflow.Id"`
+on the canvas div, ensures the JS module is re-invoked with the new
+graph data after the new load completes. Without the reset, you get
+a stale canvas pointing at the old workflow.
+
+**Build the JS-friendly payload in C#, not JS.** The repo returns
+`WorkflowNode` records with .NET-cased properties and FK-style edges
+(path1/path2). Transforming this into `{nodes: [...], edges: [...]}`
+in C# before invoking `mount` keeps the JS module dumb: it never has
+to know domain rules ("path2 is only valid on Decisions") because
+the C# side has already flattened the structure. The JS module just
+draws whatever it's handed.
+
+**JSDisconnectedException is the friend, not the foe.** When the
+SignalR circuit drops (user navigated away, network blip), any
+pending JS call throws `JSDisconnectedException`. Catch it
+quietly in both the mount path and the disposal path — there's
+nothing meaningful to clean up because the browser already disposed
+the document. The Logger call would otherwise generate noise on
+every successful page-away.

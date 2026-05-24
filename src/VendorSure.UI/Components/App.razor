@@ -20,6 +20,11 @@
     <ReconnectModal />
     <script src="_content/MudBlazor/MudBlazor.min.js"></script>
     <script src="@Assets["_framework/blazor.web.js"]"></script>
+    @* D3 v7 vendored locally at wwwroot/lib. UMD module attaches to
+       window.d3; the workflow-designer ES module reads it from there.
+       Loaded globally so it's available to any future visualization
+       page; cost is negligible (~280KB, cached). *@
+    <script src="@Assets["lib/d3.v7.min.js"]"></script>
 </body>
 
 </html>
