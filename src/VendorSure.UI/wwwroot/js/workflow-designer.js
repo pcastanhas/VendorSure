@@ -270,7 +270,18 @@ export async function mount(selector, graphData, dotNetRef) {
 
     nodeG.each(function (d) {
         const sel = d3.select(this);
-        const style = NODE_STYLE[d.nodeTypeId] || NODE_STYLE[NODE_TYPE.Process];
+        const baseStyle = NODE_STYLE[d.nodeTypeId] || NODE_STYLE[NODE_TYPE.Process];
+
+        // Per-block color override. block_catalog.color is an optional
+        // 7-char hex (#rrggbb) on Process and Decision blocks; null
+        // means "use the node-type default." When present we use it as
+        // the fill and derive a 30%-darker stroke. Text color stays at
+        // the type default — block authors picking custom fills are
+        // expected to pick colors that work with the default text.
+        const style = d.blockColor
+            ? { ...baseStyle, fill: d.blockColor, stroke: darken(d.blockColor, 0.7) }
+            : baseStyle;
+
         drawShape(sel, style);
 
         // Native SVG hover tooltip — appended FIRST so browsers know to
@@ -289,14 +300,6 @@ export async function mount(selector, graphData, dotNetRef) {
             .attr("font-weight", "500")
             .attr("fill", style.text)
             .text(nodeLabel(d));
-        sel.append("text")
-            .attr("x", NODE_W / 2 - 4)
-            .attr("y", -NODE_H / 2 + 12)
-            .attr("text-anchor", "end")
-            .attr("font-size", "9px")
-            .attr("fill", style.text)
-            .attr("opacity", 0.7)
-            .text(`#${d.id}`);
     });
 
     // + buttons, drawn last so they paint on top of nodes and edges.
@@ -658,6 +661,23 @@ function nodeLabel(node) {
         return node.blockName;
     }
     return NODE_LABEL[node.nodeTypeId] || `Type ${node.nodeTypeId}`;
+}
+
+// Darken a hex color by multiplying each RGB channel by `factor`.
+// Used to derive a stroke color from a block_catalog.color fill so
+// the border reads as "darker version of the fill" rather than the
+// node-type's default stroke (which might clash with a custom fill).
+// Accepts #rrggbb. Returns the same shape. If the input doesn't parse,
+// returns black as a safe fallback (any color paired with black will
+// at least be visible).
+function darken(hex, factor) {
+    const m = /^#([0-9a-f]{2})([0-9a-f]{2})([0-9a-f]{2})$/i.exec(hex);
+    if (!m) return "#000000";
+    const r = Math.round(parseInt(m[1], 16) * factor);
+    const g = Math.round(parseInt(m[2], 16) * factor);
+    const b = Math.round(parseInt(m[3], 16) * factor);
+    const hh = (n) => n.toString(16).padStart(2, "0");
+    return `#${hh(r)}${hh(g)}${hh(b)}`;
 }
 
 function drawShape(sel, style) {
