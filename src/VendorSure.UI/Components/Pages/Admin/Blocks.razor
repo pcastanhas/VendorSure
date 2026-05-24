@@ -1,0 +1,396 @@
+@page "/admin/blocks"
+@attribute [Authorize]
+
+@using Microsoft.AspNetCore.Authorization
+@using VendorSure.Domain.Workflows
+@using VendorSure.Services.Workflows
+
+@inject IBlockCatalogRepository BlockRepository
+@inject IDialogService DialogService
+@inject ISnackbar Snackbar
+@inject ILogger<Blocks> Logger
+
+<PageTitle>Blocks — VendorSure</PageTitle>
+
+<MudStack Row="true" AlignItems="AlignItems.Center" Class="mb-4">
+    <MudStack Spacing="0">
+        <MudText Typo="Typo.h4">Blocks</MudText>
+        <MudText Typo="Typo.body2" Class="mud-text-secondary">
+            The catalog of Process and Decision blocks workflow designers can
+            drop on a workflow canvas. Blocks cannot be deleted; deactivate them
+            instead to hide them from the picker.
+        </MudText>
+    </MudStack>
+    <MudSpacer />
+    <MudButton Variant="Variant.Filled"
+               Color="Color.Primary"
+               StartIcon="@Icons.Material.Filled.Add"
+               OnClick="OpenCreateDialog">
+        New block
+    </MudButton>
+</MudStack>
+
+@* Two tables, one per node type, so admin scans group-then-name. Same
+   sort the repo's ListAllAsync uses; we just split the result client-side. *@
+@foreach (var section in _sections)
+{
+    <MudText Typo="Typo.h6" Class="mt-4 mb-2">@section.Header</MudText>
+    <MudTable Items="@section.Items"
+              Dense="true"
+              Hover="true"
+              Loading="@_loading"
+              LoadingProgressColor="Color.Primary"
+              Elevation="1">
+        <HeaderContent>
+            <MudTh Style="width: 32px;"></MudTh>
+            <MudTh>Name</MudTh>
+            <MudTh>Description</MudTh>
+            <MudTh Style="width: 110px;">Actor</MudTh>
+            @if (section.NodeTypeId == WorkflowNodeTypeIds.Decision)
+            {
+                <MudTh Style="width: 140px;">Path labels</MudTh>
+            }
+            <MudTh Style="width: 90px; text-align: center;">Active</MudTh>
+            <MudTh Style="width: 64px;"></MudTh>
+        </HeaderContent>
+        <RowTemplate>
+            <MudTd>
+                @* Color swatch matching the block's effective color
+                   (custom override or node-type default). *@
+                <div style="@SwatchStyle(context)"></div>
+            </MudTd>
+            <MudTd DataLabel="Name">
+                @if (!context.IsActive)
+                {
+                    <span class="mud-text-disabled">@context.Name</span>
+                }
+                else
+                {
+                    @context.Name
+                }
+            </MudTd>
+            <MudTd DataLabel="Description">
+                <span class="mud-text-secondary">@context.Description</span>
+            </MudTd>
+            <MudTd DataLabel="Actor">@context.ActorType</MudTd>
+            @if (section.NodeTypeId == WorkflowNodeTypeIds.Decision)
+            {
+                <MudTd DataLabel="Path labels">
+                    <span class="mud-text-secondary">
+                        @context.Path1Decision / @context.Path2Decision
+                    </span>
+                </MudTd>
+            }
+            <MudTd Style="text-align: center;">
+                <MudSwitch T="bool"
+                           Value="@context.IsActive"
+                           ValueChanged="@(active => ToggleActiveAsync(context, active))"
+                           Color="Color.Primary"
+                           Size="Size.Small" />
+            </MudTd>
+            <MudTd Style="text-align: right;">
+                <MudIconButton Icon="@Icons.Material.Filled.Edit"
+                               Size="Size.Small"
+                               OnClick="@(() => OpenEditDialog(context))"
+                               aria-label="@($"Edit {context.Name}")" />
+            </MudTd>
+        </RowTemplate>
+        <NoRecordsContent>
+            <MudText>No @section.HeaderLower blocks yet.</MudText>
+        </NoRecordsContent>
+        <LoadingContent>
+            <MudText>Loading…</MudText>
+        </LoadingContent>
+    </MudTable>
+}
+
+@code {
+    // Materialized once per load: two sections, one per node type. The
+    // repo returns the full ordered list; we split it here so the UI
+    // can render distinct tables (different columns for Decision).
+    private record BlockSection(int NodeTypeId, string Header, string HeaderLower,
+                                IReadOnlyList<BlockCatalog> Items);
+
+    private IReadOnlyList<BlockSection> _sections = Array.Empty<BlockSection>();
+    private bool _loading = true;
+
+    protected override async Task OnInitializedAsync() => await LoadAsync();
+
+    private async Task LoadAsync()
+    {
+        _loading = true;
+        try
+        {
+            var all = await BlockRepository.ListAllAsync();
+            _sections = new[]
+            {
+                new BlockSection(
+                    WorkflowNodeTypeIds.Process, "Process blocks", "process",
+                    all.Where(b => b.NodeTypeId == WorkflowNodeTypeIds.Process).ToList()),
+                new BlockSection(
+                    WorkflowNodeTypeIds.Decision, "Decision blocks", "decision",
+                    all.Where(b => b.NodeTypeId == WorkflowNodeTypeIds.Decision).ToList()),
+            };
+        }
+        catch (Exception ex)
+        {
+            Logger.LogError(ex, "Failed to load block catalog.");
+            _sections = Array.Empty<BlockSection>();
+            Snackbar.Add("Failed to load blocks. Check the log for details.", Severity.Error);
+        }
+        finally
+        {
+            _loading = false;
+        }
+    }
+
+    private static string SwatchStyle(BlockCatalog block)
+    {
+        var fill = block.Color ?? DefaultColorFor(block.NodeTypeId);
+        // 16px square with a 1px subtle border so light colors stay
+        // visible against the table's white background.
+        return $"width: 16px; height: 16px; border-radius: 3px; " +
+               $"background-color: {fill}; " +
+               $"border: 1px solid rgba(0,0,0,0.15);";
+    }
+
+    // Matches the node-type defaults baked into the workflow-designer
+    // JS module (NODE_STYLE). Kept here as a constant rather than read
+    // from the JS — server-side rendering needs the colors before any
+    // JS module loads.
+    private static string DefaultColorFor(int nodeTypeId) => nodeTypeId switch
+    {
+        WorkflowNodeTypeIds.Process => "#1976d2",
+        WorkflowNodeTypeIds.Decision => "#ef6c00",
+        _ => "#9e9e9e",
+    };
+
+    // ===== Dialog flow ==================================================
+
+    private async Task OpenCreateDialog()
+    {
+        var blank = new BlockCatalog
+        {
+            Id = 0,
+            NodeTypeId = WorkflowNodeTypeIds.Process,
+            Name = string.Empty,
+            Description = string.Empty,
+            ClassName = string.Empty,
+            IsActive = true,
+            ActorType = BlockCatalogActorType.System,
+        };
+
+        var parameters = new DialogParameters<EditBlockDialog>
+        {
+            { x => x.Block, blank },
+            { x => x.ReferenceCount, 0 },  // new blocks are never referenced
+        };
+
+        await ShowDialogAndHandleAsync("New block", parameters, isCreate: true);
+    }
+
+    private async Task OpenEditDialog(BlockCatalog block)
+    {
+        // The reference count drives whether class_name editing is
+        // disabled. Repo will refuse the change anyway if class_name
+        // is modified on an in-use block; the UI just stops the
+        // operation earlier with a clearer message.
+        int refCount;
+        try
+        {
+            refCount = await BlockRepository.CountWorkflowNodeReferencesAsync(block.Id);
+        }
+        catch (Exception ex)
+        {
+            Logger.LogError(ex, "Failed to count refs for block {Id}.", block.Id);
+            Snackbar.Add("Failed to open editor. Check the log for details.", Severity.Error);
+            return;
+        }
+
+        var parameters = new DialogParameters<EditBlockDialog>
+        {
+            { x => x.Block, block },
+            { x => x.ReferenceCount, refCount },
+        };
+
+        await ShowDialogAndHandleAsync($"Edit {block.Name}", parameters, isCreate: false);
+    }
+
+    private async Task ShowDialogAndHandleAsync(
+        string title,
+        DialogParameters<EditBlockDialog> parameters,
+        bool isCreate)
+    {
+        var options = new DialogOptions
+        {
+            CloseOnEscapeKey = true,
+            MaxWidth = MaxWidth.Medium,
+            FullWidth = true,
+        };
+
+        var dialog = await DialogService.ShowAsync<EditBlockDialog>(title, parameters, options);
+        var result = await dialog.Result;
+        if (result is null || result.Canceled) return;
+
+        if (result.Data is not BlockCatalog edited)
+        {
+            Logger.LogWarning(
+                "Edit block dialog returned unexpected data type {Type}.",
+                result.Data?.GetType().Name ?? "null");
+            return;
+        }
+
+        if (isCreate) await SaveCreateAsync(edited);
+        else await SaveUpdateAsync(edited);
+    }
+
+    private async Task SaveCreateAsync(BlockCatalog seed)
+    {
+        try
+        {
+            var result = await BlockRepository.CreateAsync(seed);
+            switch (result.Outcome)
+            {
+                case CreateBlockCatalogOutcome.Created:
+                    Logger.LogInformation(
+                        "Block '{Name}' created (id={Id}) by admin UI.",
+                        seed.Name, result.Id);
+                    Snackbar.Add($"Created {seed.Name}.", Severity.Success);
+                    await LoadAsync();
+                    break;
+
+                default:
+                    // The dialog pre-validates these, so reaching the
+                    // default here means an edge case slipped through.
+                    Logger.LogWarning(
+                        "Create rejected for '{Name}': {Outcome}.",
+                        seed.Name, result.Outcome);
+                    Snackbar.Add(
+                        $"Cannot create {seed.Name}: {DescribeOutcome(result.Outcome)}.",
+                        Severity.Error);
+                    break;
+            }
+        }
+        catch (Exception ex)
+        {
+            Logger.LogError(ex, "Failed to create block '{Name}'.", seed.Name);
+            Snackbar.Add($"Failed to create {seed.Name}: {ex.Message}", Severity.Error);
+        }
+    }
+
+    private async Task SaveUpdateAsync(BlockCatalog edited)
+    {
+        try
+        {
+            var result = await BlockRepository.UpdateAsync(edited);
+            switch (result)
+            {
+                case UpdateBlockCatalogOutcome.Updated:
+                    Logger.LogInformation("Block {Id} updated by admin UI.", edited.Id);
+                    Snackbar.Add($"Saved {edited.Name}.", Severity.Success);
+                    await LoadAsync();
+                    break;
+
+                case UpdateBlockCatalogOutcome.NotFound:
+                    Logger.LogWarning("Update NotFound for block id={Id}.", edited.Id);
+                    Snackbar.Add(
+                        $"Could not save {edited.Name} — the block no longer exists.",
+                        Severity.Warning);
+                    await LoadAsync();
+                    break;
+
+                case UpdateBlockCatalogOutcome.RejectedClassNameChangeBlocked:
+                    // Should be caught by the dialog (class_name field
+                    // disabled when refs > 0), but if a concurrent
+                    // workflow add slipped a reference in between the
+                    // dialog open and the save, the repo still refuses.
+                    Logger.LogWarning(
+                        "Update rejected for block id={Id}: class_name change blocked (in use).",
+                        edited.Id);
+                    Snackbar.Add(
+                        $"Cannot change class name on {edited.Name}: a workflow has been " +
+                        $"added that uses it. Deactivate this block and create a new one " +
+                        $"with the new class instead.",
+                        Severity.Error);
+                    await LoadAsync();
+                    break;
+
+                default:
+                    Logger.LogWarning(
+                        "Update rejected for block id={Id}: {Outcome}.",
+                        edited.Id, result);
+                    Snackbar.Add(
+                        $"Cannot save {edited.Name}: {DescribeUpdateOutcome(result)}.",
+                        Severity.Error);
+                    break;
+            }
+        }
+        catch (Exception ex)
+        {
+            Logger.LogError(ex, "Failed to update block id={Id}.", edited.Id);
+            Snackbar.Add($"Failed to save {edited.Name}: {ex.Message}", Severity.Error);
+        }
+    }
+
+    private async Task ToggleActiveAsync(BlockCatalog block, bool newActive)
+    {
+        try
+        {
+            var result = await BlockRepository.SetActiveAsync(block.Id, newActive);
+            switch (result)
+            {
+                case SetActiveOutcome.Updated:
+                    Logger.LogInformation(
+                        "Block {Id} {Action} by admin UI.",
+                        block.Id, newActive ? "reactivated" : "deactivated");
+                    Snackbar.Add(
+                        newActive
+                            ? $"Reactivated {block.Name}."
+                            : $"Deactivated {block.Name}.",
+                        Severity.Success);
+                    await LoadAsync();
+                    break;
+
+                case SetActiveOutcome.NotFound:
+                    Logger.LogWarning("SetActive NotFound for block id={Id}.", block.Id);
+                    Snackbar.Add(
+                        $"{block.Name} no longer exists.", Severity.Warning);
+                    await LoadAsync();
+                    break;
+            }
+        }
+        catch (Exception ex)
+        {
+            Logger.LogError(ex, "Failed to toggle active for block id={Id}.", block.Id);
+            Snackbar.Add($"Failed to update {block.Name}: {ex.Message}", Severity.Error);
+        }
+    }
+
+    private static string DescribeOutcome(CreateBlockCatalogOutcome outcome) => outcome switch
+    {
+        CreateBlockCatalogOutcome.RejectedInvalidNodeType =>
+            "the node type must be Process or Decision",
+        CreateBlockCatalogOutcome.RejectedInvalidActorType =>
+            "the actor type must be System, Human, or AI",
+        CreateBlockCatalogOutcome.RejectedDecisionLabelsRequired =>
+            "Decision blocks require both path1 and path2 labels",
+        CreateBlockCatalogOutcome.RejectedProcessLabelsForbidden =>
+            "Process blocks must not have path labels",
+        CreateBlockCatalogOutcome.RejectedInvalidColor =>
+            "the color must be a 7-character hex string like #1976d2",
+        _ => outcome.ToString(),
+    };
+
+    private static string DescribeUpdateOutcome(UpdateBlockCatalogOutcome outcome) => outcome switch
+    {
+        UpdateBlockCatalogOutcome.RejectedInvalidActorType =>
+            "the actor type must be System, Human, or AI",
+        UpdateBlockCatalogOutcome.RejectedDecisionLabelsRequired =>
+            "Decision blocks require both path1 and path2 labels",
+        UpdateBlockCatalogOutcome.RejectedProcessLabelsForbidden =>
+            "Process blocks must not have path labels",
+        UpdateBlockCatalogOutcome.RejectedInvalidColor =>
+            "the color must be a 7-character hex string",
+        _ => outcome.ToString(),
+    };
+}

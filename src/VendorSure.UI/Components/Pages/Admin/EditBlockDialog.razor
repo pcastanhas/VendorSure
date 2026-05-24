@@ -1,0 +1,305 @@
+@using VendorSure.Domain.Workflows
+
+<MudDialog>
+    <TitleContent>
+        <MudText Typo="Typo.h6">@TitleText</MudText>
+    </TitleContent>
+    <DialogContent>
+        <MudStack Spacing="3">
+            <MudTextField @bind-Value="_name"
+                          Label="Name"
+                          Variant="Variant.Outlined"
+                          Immediate="true"
+                          Error="@NameIsInvalid"
+                          ErrorText="Name is required (max 50 characters)."
+                          MaxLength="50"
+                          HelperText="Short label shown on the canvas and in the picker." />
+
+            <MudTextField @bind-Value="_description"
+                          Label="Description"
+                          Variant="Variant.Outlined"
+                          Immediate="true"
+                          Lines="2"
+                          Error="@DescriptionIsInvalid"
+                          ErrorText="Description is required (max 200 characters)."
+                          MaxLength="200"
+                          HelperText="Longer prose shown as a hover tooltip on the canvas." />
+
+            <MudTextField @bind-Value="_className"
+                          Label=".NET class name"
+                          Variant="Variant.Outlined"
+                          Immediate="true"
+                          Error="@ClassNameIsInvalid"
+                          ErrorText="Class name is required (max 200 characters)."
+                          MaxLength="200"
+                          Disabled="@ClassNameLocked"
+                          HelperText="@ClassNameHelperText" />
+
+            @* Node type — locked on edit (changing would break referencing
+               workflow_nodes via CK_workflow_nodes_block_by_type). *@
+            <MudRadioGroup T="int"
+                           Value="_nodeTypeId"
+                           ValueChanged="OnNodeTypeChanged"
+                           Disabled="@(!IsCreate)">
+                <MudText Typo="Typo.body2" Class="mb-1">Node type</MudText>
+                <MudRadio T="int" Value="@WorkflowNodeTypeIds.Process" Color="Color.Primary">
+                    Process (rectangle)
+                </MudRadio>
+                <MudRadio T="int" Value="@WorkflowNodeTypeIds.Decision" Color="Color.Primary">
+                    Decision (diamond)
+                </MudRadio>
+            </MudRadioGroup>
+            @if (!IsCreate)
+            {
+                <MudText Typo="Typo.caption" Class="mud-text-secondary mt-n2">
+                    Node type cannot be changed on an existing block.
+                </MudText>
+            }
+
+            @* Actor type — always visible, defaults to System. Identifies
+               who/what executes the block at runtime. *@
+            <MudRadioGroup T="BlockCatalogActorType"
+                           @bind-Value="_actorType">
+                <MudText Typo="Typo.body2" Class="mb-1">Actor</MudText>
+                <MudRadio T="BlockCatalogActorType" Value="BlockCatalogActorType.System" Color="Color.Primary">
+                    System (programmatic)
+                </MudRadio>
+                <MudRadio T="BlockCatalogActorType" Value="BlockCatalogActorType.Human" Color="Color.Primary">
+                    Human (routes to approver UI)
+                </MudRadio>
+                <MudRadio T="BlockCatalogActorType" Value="BlockCatalogActorType.AI" Color="Color.Primary">
+                    AI (calls AI service)
+                </MudRadio>
+            </MudRadioGroup>
+
+            @* Color picker — 4 swatches per node type. First is the
+               type default (used when _selectedColor is null); the
+               other three are darker shades that still read with the
+               default white text. *@
+            <div>
+                <MudText Typo="Typo.body2" Class="mb-1">Color</MudText>
+                <MudStack Row="true" Spacing="2" AlignItems="AlignItems.Center">
+                    @foreach (var swatch in CurrentSwatches)
+                    {
+                        <div class="block-color-swatch"
+                             style="@SwatchStyle(swatch)"
+                             @onclick="@(() => SelectSwatch(swatch))"
+                             title="@swatch">
+                            @if (IsSelectedSwatch(swatch))
+                            {
+                                <MudIcon Icon="@Icons.Material.Filled.Check"
+                                         Size="Size.Small"
+                                         Style="color: #fff;" />
+                            }
+                        </div>
+                    }
+                    <MudText Typo="Typo.caption" Class="mud-text-secondary ml-2">
+                        @(_selectedColor is null ? "(default)" : _selectedColor)
+                    </MudText>
+                </MudStack>
+            </div>
+
+            @* Decision-only path labels. Shown only when nodeType is
+               Decision; otherwise both stay NULL per
+               CK_block_catalog_decision_labels. *@
+            @if (_nodeTypeId == WorkflowNodeTypeIds.Decision)
+            {
+                <MudStack Row="true" Spacing="2">
+                    <MudTextField @bind-Value="_path1Decision"
+                                  Label="Path 1 label"
+                                  Variant="Variant.Outlined"
+                                  Immediate="true"
+                                  Error="@Path1IsInvalid"
+                                  ErrorText="Required."
+                                  MaxLength="20"
+                                  HelperText="Left vertex (e.g. 'True', 'Approved')." />
+                    <MudTextField @bind-Value="_path2Decision"
+                                  Label="Path 2 label"
+                                  Variant="Variant.Outlined"
+                                  Immediate="true"
+                                  Error="@Path2IsInvalid"
+                                  ErrorText="Required."
+                                  MaxLength="20"
+                                  HelperText="Right vertex (e.g. 'False', 'Denied')." />
+                </MudStack>
+            }
+
+            @* Active toggle — edit only; create always sets active=true. *@
+            @if (!IsCreate)
+            {
+                <MudSwitch T="bool"
+                           @bind-Value="_isActive"
+                           Color="Color.Primary">
+                    Active
+                </MudSwitch>
+            }
+        </MudStack>
+    </DialogContent>
+    <DialogActions>
+        <MudButton OnClick="Cancel">Cancel</MudButton>
+        <MudButton Color="Color.Primary"
+                   Variant="Variant.Filled"
+                   OnClick="Save"
+                   Disabled="@IsAnyFieldInvalid">
+            Save
+        </MudButton>
+    </DialogActions>
+</MudDialog>
+
+<style>
+    .block-color-swatch {
+        width: 32px;
+        height: 32px;
+        border-radius: 4px;
+        border: 1px solid rgba(0, 0, 0, 0.2);
+        cursor: pointer;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        transition: transform 0.1s ease;
+    }
+    .block-color-swatch:hover {
+        transform: scale(1.1);
+    }
+</style>
+
+@code {
+    [CascadingParameter] private IMudDialogInstance MudDialog { get; set; } = default!;
+
+    /// <summary>The block being edited. Id == 0 means "create new".</summary>
+    [Parameter, EditorRequired] public BlockCatalog Block { get; set; } = default!;
+
+    /// <summary>
+    /// Number of workflow_nodes rows referencing this block. Drives
+    /// whether the class_name field is disabled. Always 0 for creation.
+    /// </summary>
+    [Parameter, EditorRequired] public int ReferenceCount { get; set; }
+
+    // Form state mirrored from Block on init; written back on Save.
+    private string _name = string.Empty;
+    private string _description = string.Empty;
+    private string _className = string.Empty;
+    private int _nodeTypeId = WorkflowNodeTypeIds.Process;
+    private BlockCatalogActorType _actorType = BlockCatalogActorType.System;
+    private string? _selectedColor;  // null = use type default
+    private string _path1Decision = string.Empty;
+    private string _path2Decision = string.Empty;
+    private bool _isActive = true;
+
+    // 4 swatches per node type. First is the type default (NULL when
+    // selected — repo treats NULL as "use type default" everywhere).
+    // The other three are darker shades that all read with white text.
+    // Process: blue 700 → 600/800/900. Decision: orange 800 → 700/900/
+    // deep-orange-900.
+    private static readonly string[] ProcessSwatches =
+        new[] { "#1976d2", "#1565c0", "#0d47a1", "#1e88e5" };
+
+    private static readonly string[] DecisionSwatches =
+        new[] { "#ef6c00", "#e65100", "#bf360c", "#f57c00" };
+
+    private string[] CurrentSwatches =>
+        _nodeTypeId == WorkflowNodeTypeIds.Decision ? DecisionSwatches : ProcessSwatches;
+
+    private bool IsCreate => Block.Id == 0;
+    private string TitleText => IsCreate ? "New block" : $"Edit {Block.Name}";
+
+    private bool ClassNameLocked => !IsCreate && ReferenceCount > 0;
+    private string ClassNameHelperText => ClassNameLocked
+        ? $"Locked: this block is used by {ReferenceCount} workflow node(s). " +
+          "Deactivate and create a new block with the new class instead."
+        : "Fully-qualified .NET type implementing the block (e.g. " +
+          "VendorSure.Blocks.OfacCheck).";
+
+    // Validation
+    private bool NameIsInvalid => string.IsNullOrWhiteSpace(_name);
+    private bool DescriptionIsInvalid => string.IsNullOrWhiteSpace(_description);
+    private bool ClassNameIsInvalid => string.IsNullOrWhiteSpace(_className);
+    private bool Path1IsInvalid =>
+        _nodeTypeId == WorkflowNodeTypeIds.Decision && string.IsNullOrWhiteSpace(_path1Decision);
+    private bool Path2IsInvalid =>
+        _nodeTypeId == WorkflowNodeTypeIds.Decision && string.IsNullOrWhiteSpace(_path2Decision);
+
+    private bool IsAnyFieldInvalid =>
+        NameIsInvalid || DescriptionIsInvalid || ClassNameIsInvalid
+        || Path1IsInvalid || Path2IsInvalid;
+
+    protected override void OnInitialized()
+    {
+        _name = Block.Name ?? string.Empty;
+        _description = Block.Description ?? string.Empty;
+        _className = Block.ClassName ?? string.Empty;
+        _nodeTypeId = Block.NodeTypeId == 0
+            ? WorkflowNodeTypeIds.Process
+            : Block.NodeTypeId;
+        _actorType = Block.ActorType;
+        _selectedColor = Block.Color;  // null => default
+        _path1Decision = Block.Path1Decision ?? string.Empty;
+        _path2Decision = Block.Path2Decision ?? string.Empty;
+        _isActive = IsCreate ? true : Block.IsActive;
+    }
+
+    // Node-type swap (create only): clear color so the picker re-snaps
+    // to the new type's default. Also clear Decision-only fields if
+    // we're going Decision → Process.
+    private void OnNodeTypeChanged(int newType)
+    {
+        _nodeTypeId = newType;
+        _selectedColor = null;  // default for the new type
+        if (newType == WorkflowNodeTypeIds.Process)
+        {
+            _path1Decision = string.Empty;
+            _path2Decision = string.Empty;
+        }
+    }
+
+    private void SelectSwatch(string swatch)
+    {
+        // First swatch in each set IS the type default; treat clicking
+        // it as "use default" (null in the entity) so the workflow
+        // designer keeps using the type default if we ever change it.
+        var isDefault = swatch == CurrentSwatches[0];
+        _selectedColor = isDefault ? null : swatch;
+    }
+
+    private bool IsSelectedSwatch(string swatch)
+    {
+        if (_selectedColor is null)
+        {
+            // Default swatch is highlighted when nothing is explicitly chosen.
+            return swatch == CurrentSwatches[0];
+        }
+        return string.Equals(swatch, _selectedColor, StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static string SwatchStyle(string color) =>
+        $"background-color: {color};";
+
+    private void Cancel() => MudDialog.Cancel();
+
+    private void Save()
+    {
+        if (IsAnyFieldInvalid) return;
+
+        var nodeType = IsCreate ? _nodeTypeId : Block.NodeTypeId;  // locked on edit
+
+        var result = new BlockCatalog
+        {
+            Id = Block.Id,
+            NodeTypeId = nodeType,
+            Name = _name.Trim(),
+            Description = _description.Trim(),
+            ClassName = _className.Trim(),
+            IsActive = _isActive,
+            Color = _selectedColor,
+            ActorType = _actorType,
+            Path1Decision = nodeType == WorkflowNodeTypeIds.Decision
+                ? _path1Decision.Trim()
+                : null,
+            Path2Decision = nodeType == WorkflowNodeTypeIds.Decision
+                ? _path2Decision.Trim()
+                : null,
+        };
+
+        MudDialog.Close(DialogResult.Ok(result));
+    }
+}
