@@ -9,14 +9,16 @@ namespace VendorSure.Infrastructure.Tests.Workflows;
 /// <summary>
 /// Integration tests for the block-catalog repository.
 ///
-/// The repository is read-only — no mutations to test — so the test
-/// surface is small: ListActiveAsync must return active rows only,
-/// hydrate every column, and honor the documented ordering
-/// (node_type_id ASC, description ASC).
+/// Originally a read-only repo (Phase 5 chunks 1-10); gained authoring
+/// methods (CreateAsync, UpdateAsync, SetActiveAsync, GetByIdAsync,
+/// ListAllAsync, CountWorkflowNodeReferencesAsync) during cleanup to
+/// support the admin Blocks page. Tests cover both the original list
+/// behavior and the new authoring surface.
 ///
-/// Each test inserts its own catalog rows with prefixed descriptions
-/// to avoid colliding with any seed data the dev DB may already have,
-/// then filters the returned list to just those rows for the assertion.
+/// Each test inserts its own catalog rows with prefixed names/
+/// descriptions to avoid colliding with any seed data the dev DB may
+/// already have, then filters the returned list to just those rows
+/// for the assertion.
 /// </summary>
 public sealed class BlockCatalogRepositoryTests
     : IClassFixture<InfrastructureTestFixture>
@@ -173,6 +175,407 @@ public sealed class BlockCatalogRepositoryTests
         Assert.NotNull(result);
     }
 
+    // ==== ListAllAsync ====================================================
+
+    [Fact]
+    public async Task ListAllAsync_returns_active_and_inactive()
+    {
+        var prefix = "_test_bc_" + Guid.NewGuid().ToString("N");
+        var insertedIds = new List<int>();
+        try
+        {
+            var activeId = await InsertBlockAsync(
+                nodeTypeId: 2, name: $"{prefix}_active", description: "active",
+                className: "X", isActive: true, color: null);
+            var inactiveId = await InsertBlockAsync(
+                nodeTypeId: 2, name: $"{prefix}_inactive", description: "inactive",
+                className: "X", isActive: false, color: null);
+            insertedIds.Add(activeId);
+            insertedIds.Add(inactiveId);
+
+            var all = await _catalog.ListAllAsync();
+            var mine = all.Where(b => b.Name.StartsWith(prefix)).ToList();
+            Assert.Equal(2, mine.Count);
+            Assert.Contains(mine, b => b.Id == activeId && b.IsActive);
+            Assert.Contains(mine, b => b.Id == inactiveId && !b.IsActive);
+        }
+        finally
+        {
+            await CleanupAsync(insertedIds);
+        }
+    }
+
+    // ==== GetByIdAsync ====================================================
+
+    [Fact]
+    public async Task GetByIdAsync_returns_row_with_all_columns()
+    {
+        var prefix = "_test_bc_" + Guid.NewGuid().ToString("N");
+        var insertedIds = new List<int>();
+        try
+        {
+            var id = await InsertBlockAsync(
+                nodeTypeId: 3, name: $"{prefix}_get", description: "for get test",
+                className: "VendorSure.Test.Get", isActive: true, color: "#123456",
+                path1Decision: "Yes", path2Decision: "No",
+                actorType: BlockCatalogActorType.Human);
+            insertedIds.Add(id);
+
+            var fetched = await _catalog.GetByIdAsync(id);
+            Assert.NotNull(fetched);
+            Assert.Equal(id, fetched!.Id);
+            Assert.Equal(3, fetched.NodeTypeId);
+            Assert.Equal($"{prefix}_get", fetched.Name);
+            Assert.Equal("for get test", fetched.Description);
+            Assert.Equal("VendorSure.Test.Get", fetched.ClassName);
+            Assert.True(fetched.IsActive);
+            Assert.Equal("#123456", fetched.Color);
+            Assert.Equal("Yes", fetched.Path1Decision);
+            Assert.Equal("No", fetched.Path2Decision);
+            Assert.Equal(BlockCatalogActorType.Human, fetched.ActorType);
+        }
+        finally
+        {
+            await CleanupAsync(insertedIds);
+        }
+    }
+
+    [Fact]
+    public async Task GetByIdAsync_returns_null_for_unknown_id()
+    {
+        var fetched = await _catalog.GetByIdAsync(int.MaxValue - 1);
+        Assert.Null(fetched);
+    }
+
+    // ==== CreateAsync =====================================================
+
+    [Fact]
+    public async Task CreateAsync_inserts_process_block()
+    {
+        var prefix = "_test_bc_" + Guid.NewGuid().ToString("N");
+        var insertedIds = new List<int>();
+        try
+        {
+            var seed = new BlockCatalog
+            {
+                NodeTypeId = 2,
+                Name = $"{prefix}_proc",
+                Description = "Created via CreateAsync",
+                ClassName = "VendorSure.Test.CreatedProc",
+                IsActive = true,
+                Color = null,
+                ActorType = BlockCatalogActorType.System,
+            };
+
+            var result = await _catalog.CreateAsync(seed);
+            Assert.Equal(CreateBlockCatalogOutcome.Created, result.Outcome);
+            Assert.NotNull(result.Id);
+            insertedIds.Add(result.Id!.Value);
+
+            var fetched = await _catalog.GetByIdAsync(result.Id.Value);
+            Assert.NotNull(fetched);
+            Assert.Equal($"{prefix}_proc", fetched!.Name);
+            Assert.Null(fetched.Path1Decision);
+            Assert.Null(fetched.Path2Decision);
+        }
+        finally
+        {
+            await CleanupAsync(insertedIds);
+        }
+    }
+
+    [Fact]
+    public async Task CreateAsync_inserts_decision_block_with_path_labels()
+    {
+        var prefix = "_test_bc_" + Guid.NewGuid().ToString("N");
+        var insertedIds = new List<int>();
+        try
+        {
+            var seed = new BlockCatalog
+            {
+                NodeTypeId = 3,
+                Name = $"{prefix}_dec",
+                Description = "Decision via CreateAsync",
+                ClassName = "VendorSure.Test.CreatedDec",
+                IsActive = true,
+                Color = "#abcdef",
+                Path1Decision = "Pass",
+                Path2Decision = "Fail",
+                ActorType = BlockCatalogActorType.AI,
+            };
+
+            var result = await _catalog.CreateAsync(seed);
+            Assert.Equal(CreateBlockCatalogOutcome.Created, result.Outcome);
+            insertedIds.Add(result.Id!.Value);
+
+            var fetched = await _catalog.GetByIdAsync(result.Id.Value);
+            Assert.Equal("Pass", fetched!.Path1Decision);
+            Assert.Equal("Fail", fetched.Path2Decision);
+            Assert.Equal(BlockCatalogActorType.AI, fetched.ActorType);
+        }
+        finally
+        {
+            await CleanupAsync(insertedIds);
+        }
+    }
+
+    [Fact]
+    public async Task CreateAsync_rejects_invalid_node_type()
+    {
+        var seed = MinimalSeed("_test_bc_invalid_nt", nodeTypeId: 5);
+        var result = await _catalog.CreateAsync(seed);
+        Assert.Equal(CreateBlockCatalogOutcome.RejectedInvalidNodeType, result.Outcome);
+        Assert.Null(result.Id);
+    }
+
+    [Fact]
+    public async Task CreateAsync_rejects_invalid_actor_type()
+    {
+        var seed = MinimalSeed("_test_bc_invalid_actor", nodeTypeId: 2) with
+        {
+            ActorType = (BlockCatalogActorType)99,
+        };
+        var result = await _catalog.CreateAsync(seed);
+        Assert.Equal(CreateBlockCatalogOutcome.RejectedInvalidActorType, result.Outcome);
+    }
+
+    [Fact]
+    public async Task CreateAsync_rejects_decision_with_missing_path_labels()
+    {
+        var seed = MinimalSeed("_test_bc_dec_no_labels", nodeTypeId: 3);
+        // Decision but no path labels.
+        var result = await _catalog.CreateAsync(seed);
+        Assert.Equal(CreateBlockCatalogOutcome.RejectedDecisionLabelsRequired, result.Outcome);
+    }
+
+    [Fact]
+    public async Task CreateAsync_rejects_process_with_path_labels()
+    {
+        var seed = MinimalSeed("_test_bc_proc_has_labels", nodeTypeId: 2) with
+        {
+            Path1Decision = "Yes",
+            Path2Decision = "No",
+        };
+        var result = await _catalog.CreateAsync(seed);
+        Assert.Equal(CreateBlockCatalogOutcome.RejectedProcessLabelsForbidden, result.Outcome);
+    }
+
+    [Fact]
+    public async Task CreateAsync_rejects_malformed_color()
+    {
+        var seed = MinimalSeed("_test_bc_bad_color", nodeTypeId: 2) with
+        {
+            Color = "not-a-hex",
+        };
+        var result = await _catalog.CreateAsync(seed);
+        Assert.Equal(CreateBlockCatalogOutcome.RejectedInvalidColor, result.Outcome);
+    }
+
+    // ==== UpdateAsync =====================================================
+
+    [Fact]
+    public async Task UpdateAsync_updates_editable_fields()
+    {
+        var prefix = "_test_bc_" + Guid.NewGuid().ToString("N");
+        var insertedIds = new List<int>();
+        try
+        {
+            var id = await InsertBlockAsync(
+                nodeTypeId: 2, name: $"{prefix}_orig", description: "orig",
+                className: "VendorSure.Test.Orig", isActive: true, color: null);
+            insertedIds.Add(id);
+
+            var edited = new BlockCatalog
+            {
+                Id = id,
+                NodeTypeId = 2,                           // preserved by repo
+                Name = $"{prefix}_updated",
+                Description = "updated",
+                ClassName = "VendorSure.Test.Orig",       // unchanged
+                IsActive = true,
+                Color = "#fedcba",
+                ActorType = BlockCatalogActorType.Human,
+            };
+
+            var result = await _catalog.UpdateAsync(edited);
+            Assert.Equal(UpdateBlockCatalogOutcome.Updated, result);
+
+            var fetched = await _catalog.GetByIdAsync(id);
+            Assert.Equal($"{prefix}_updated", fetched!.Name);
+            Assert.Equal("updated", fetched.Description);
+            Assert.Equal("#fedcba", fetched.Color);
+            Assert.Equal(BlockCatalogActorType.Human, fetched.ActorType);
+        }
+        finally
+        {
+            await CleanupAsync(insertedIds);
+        }
+    }
+
+    [Fact]
+    public async Task UpdateAsync_returns_not_found_for_unknown_id()
+    {
+        var edited = MinimalSeed("_test_bc_nf", nodeTypeId: 2) with
+        {
+            Id = int.MaxValue - 1,
+            ClassName = "X",
+        };
+        var result = await _catalog.UpdateAsync(edited);
+        Assert.Equal(UpdateBlockCatalogOutcome.NotFound, result);
+    }
+
+    [Fact]
+    public async Task UpdateAsync_allows_class_name_change_when_block_unused()
+    {
+        var prefix = "_test_bc_" + Guid.NewGuid().ToString("N");
+        var insertedIds = new List<int>();
+        try
+        {
+            var id = await InsertBlockAsync(
+                nodeTypeId: 2, name: $"{prefix}_n", description: "d",
+                className: "VendorSure.Test.Old", isActive: true, color: null);
+            insertedIds.Add(id);
+
+            var edited = (await _catalog.GetByIdAsync(id))! with
+            {
+                ClassName = "VendorSure.Test.New",
+            };
+            var result = await _catalog.UpdateAsync(edited);
+            Assert.Equal(UpdateBlockCatalogOutcome.Updated, result);
+
+            var fetched = await _catalog.GetByIdAsync(id);
+            Assert.Equal("VendorSure.Test.New", fetched!.ClassName);
+        }
+        finally
+        {
+            await CleanupAsync(insertedIds);
+        }
+    }
+
+    [Fact]
+    public async Task UpdateAsync_rejects_class_name_change_when_block_in_use()
+    {
+        // Seed a workflow that uses the block, then try to change its
+        // class_name. Repo refuses with RejectedClassNameChangeBlocked.
+        var prefix = "_test_bc_" + Guid.NewGuid().ToString("N");
+        var blockIds = new List<int>();
+        var typeIds = new List<int>();
+        try
+        {
+            var blockId = await InsertBlockAsync(
+                nodeTypeId: 2, name: $"{prefix}_inuse", description: "in use",
+                className: "VendorSure.Test.InUse", isActive: true, color: null);
+            blockIds.Add(blockId);
+
+            // Build the FK chain: request_type → version → workflow → node.
+            var typeId = await InsertRequestTypeAsync(prefix);
+            typeIds.Add(typeId);
+            var workflowId = await InsertWorkflowWithProcessNodeAsync(typeId, blockId);
+
+            var edited = (await _catalog.GetByIdAsync(blockId))! with
+            {
+                ClassName = "VendorSure.Test.ChangedClass",
+            };
+
+            var result = await _catalog.UpdateAsync(edited);
+            Assert.Equal(UpdateBlockCatalogOutcome.RejectedClassNameChangeBlocked, result);
+
+            // Verify the row was untouched.
+            var fetched = await _catalog.GetByIdAsync(blockId);
+            Assert.Equal("VendorSure.Test.InUse", fetched!.ClassName);
+        }
+        finally
+        {
+            await CleanupWorkflowChainAsync(typeIds);
+            await CleanupAsync(blockIds);
+        }
+    }
+
+    // ==== SetActiveAsync ==================================================
+
+    [Fact]
+    public async Task SetActiveAsync_toggles_active_flag()
+    {
+        var prefix = "_test_bc_" + Guid.NewGuid().ToString("N");
+        var insertedIds = new List<int>();
+        try
+        {
+            var id = await InsertBlockAsync(
+                nodeTypeId: 2, name: $"{prefix}_a", description: "a",
+                className: "X", isActive: true, color: null);
+            insertedIds.Add(id);
+
+            var deactivate = await _catalog.SetActiveAsync(id, false);
+            Assert.Equal(SetActiveOutcome.Updated, deactivate);
+            Assert.False((await _catalog.GetByIdAsync(id))!.IsActive);
+
+            var reactivate = await _catalog.SetActiveAsync(id, true);
+            Assert.Equal(SetActiveOutcome.Updated, reactivate);
+            Assert.True((await _catalog.GetByIdAsync(id))!.IsActive);
+        }
+        finally
+        {
+            await CleanupAsync(insertedIds);
+        }
+    }
+
+    [Fact]
+    public async Task SetActiveAsync_returns_not_found_for_unknown_id()
+    {
+        var result = await _catalog.SetActiveAsync(int.MaxValue - 1, false);
+        Assert.Equal(SetActiveOutcome.NotFound, result);
+    }
+
+    // ==== CountWorkflowNodeReferencesAsync ================================
+
+    [Fact]
+    public async Task CountWorkflowNodeReferencesAsync_returns_zero_when_unused()
+    {
+        var prefix = "_test_bc_" + Guid.NewGuid().ToString("N");
+        var insertedIds = new List<int>();
+        try
+        {
+            var blockId = await InsertBlockAsync(
+                nodeTypeId: 2, name: $"{prefix}_unused", description: "u",
+                className: "X", isActive: true, color: null);
+            insertedIds.Add(blockId);
+
+            var count = await _catalog.CountWorkflowNodeReferencesAsync(blockId);
+            Assert.Equal(0, count);
+        }
+        finally
+        {
+            await CleanupAsync(insertedIds);
+        }
+    }
+
+    [Fact]
+    public async Task CountWorkflowNodeReferencesAsync_counts_referencing_nodes()
+    {
+        var prefix = "_test_bc_" + Guid.NewGuid().ToString("N");
+        var blockIds = new List<int>();
+        var typeIds = new List<int>();
+        try
+        {
+            var blockId = await InsertBlockAsync(
+                nodeTypeId: 2, name: $"{prefix}_counted", description: "c",
+                className: "X", isActive: true, color: null);
+            blockIds.Add(blockId);
+
+            var typeId = await InsertRequestTypeAsync(prefix);
+            typeIds.Add(typeId);
+            await InsertWorkflowWithProcessNodeAsync(typeId, blockId);
+
+            var count = await _catalog.CountWorkflowNodeReferencesAsync(blockId);
+            Assert.Equal(1, count);
+        }
+        finally
+        {
+            await CleanupWorkflowChainAsync(typeIds);
+            await CleanupAsync(blockIds);
+        }
+    }
+
     // --- helpers ---------------------------------------------------------
 
     private async Task<int> InsertBlockAsync(
@@ -199,6 +602,109 @@ public sealed class BlockCatalogRepositoryTests
         {
             await connection.ExecuteAsync(
                 "DELETE FROM dbo.block_catalog WHERE id = @id;", new { id });
+        }
+    }
+
+    /// <summary>
+    /// Convenience seed for Create/Update tests that don't care about
+    /// the full BlockCatalog shape — just need a structurally-valid
+    /// rejection-test starting point. Builds a System-actor block with
+    /// no color and no path labels (caller adjusts via `with` for the
+    /// specific rejection being tested).
+    /// </summary>
+    private static BlockCatalog MinimalSeed(string namePrefix, int nodeTypeId)
+    {
+        return new BlockCatalog
+        {
+            NodeTypeId = nodeTypeId,
+            Name = namePrefix + "_" + Guid.NewGuid().ToString("N").Substring(0, 8),
+            Description = "test seed",
+            ClassName = "VendorSure.Test.Seed",
+            IsActive = true,
+            Color = null,
+            ActorType = BlockCatalogActorType.System,
+        };
+    }
+
+    /// <summary>
+    /// Raw-inserts a request_type row. Required upstream of the FK
+    /// chain when seeding a workflow node that references a catalog
+    /// block. Returns the new row's id; caller is responsible for
+    /// cleanup via <see cref="CleanupWorkflowChainAsync"/>.
+    /// </summary>
+    private async Task<int> InsertRequestTypeAsync(string namePrefix)
+    {
+        using var c = await _connectionFactory.CreateOpenConnectionAsync();
+        return await c.QuerySingleAsync<int>(@"
+            INSERT INTO dbo.request_types (name, description, is_active)
+            VALUES (@name, 'test', 1);
+            SELECT CAST(SCOPE_IDENTITY() AS int);",
+            new { name = namePrefix + "_rt_" + Guid.NewGuid().ToString("N").Substring(0, 8) });
+    }
+
+    /// <summary>
+    /// Raw-inserts the FK chain
+    ///   request_type_version → workflow_definition → workflow_nodes
+    /// terminating in a single Process node that references the given
+    /// catalog block. Used by tests that need to verify in-use checks
+    /// (CountWorkflowNodeReferencesAsync, UpdateAsync's
+    /// RejectedClassNameChangeBlocked path).
+    ///
+    /// Returns the workflow_definition_id; cleanup goes through the
+    /// request type via <see cref="CleanupWorkflowChainAsync"/>.
+    /// </summary>
+    private async Task<int> InsertWorkflowWithProcessNodeAsync(int requestTypeId, int blockId)
+    {
+        using var c = await _connectionFactory.CreateOpenConnectionAsync();
+        var sql = @"
+            DECLARE @verId int;
+            INSERT INTO dbo.request_type_versions
+                (request_type_id, version, request_state, created_ts)
+            VALUES (@requestTypeId, 1, 'Draft', SYSUTCDATETIME());
+            SET @verId = CAST(SCOPE_IDENTITY() AS int);
+
+            DECLARE @wfId int;
+            INSERT INTO dbo.workflow_definitions
+                (request_type_version_id, name, is_active)
+            VALUES (@verId, 'test-wf', 1);
+            SET @wfId = CAST(SCOPE_IDENTITY() AS int);
+
+            -- One Process node referencing the test block. Level 0
+            -- (orphan-style) is fine for this purpose — we're not
+            -- exercising the workflow engine, just the FK reference.
+            INSERT INTO dbo.workflow_nodes
+                (workflow_definition_id, node_type_id, block_catalog_id,
+                 execution_level, path1_node_id, path2_node_id)
+            VALUES (@wfId, 2, @blockId, 0, NULL, NULL);
+
+            SELECT @wfId;";
+        return await c.QuerySingleAsync<int>(
+            new CommandDefinition(sql, new { requestTypeId, blockId }));
+    }
+
+    /// <summary>
+    /// Cleans up the FK chain seeded by <see cref="InsertWorkflowWithProcessNodeAsync"/>.
+    /// Order matters: workflow_nodes → workflow_definitions →
+    /// request_type_versions → request_types.
+    /// </summary>
+    private async Task CleanupWorkflowChainAsync(IEnumerable<int> requestTypeIds)
+    {
+        using var c = await _connectionFactory.CreateOpenConnectionAsync();
+        foreach (var typeId in requestTypeIds)
+        {
+            await c.ExecuteAsync(@"
+                DELETE n FROM dbo.workflow_nodes n
+                INNER JOIN dbo.workflow_definitions wd ON wd.id = n.workflow_definition_id
+                INNER JOIN dbo.request_type_versions v ON v.id = wd.request_type_version_id
+                WHERE v.request_type_id = @typeId;
+
+                DELETE wd FROM dbo.workflow_definitions wd
+                INNER JOIN dbo.request_type_versions v ON v.id = wd.request_type_version_id
+                WHERE v.request_type_id = @typeId;
+
+                DELETE FROM dbo.request_type_versions WHERE request_type_id = @typeId;
+                DELETE FROM dbo.request_types WHERE id = @typeId;",
+                new { typeId });
         }
     }
 }
