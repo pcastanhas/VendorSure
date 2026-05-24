@@ -1006,3 +1006,130 @@ two-step pattern relied on an implicit "data doesn't change
 between my queries" assumption that wasn't true. The fix names
 the dependency (the subtree ID list) and makes it the explicit
 input to both subsequent steps.
+
+## 2026-05-24 — Existing tests can keep passing while NOT covering what you just changed
+
+Phase 5 / Chunk 10. Added workflow-validation pre-check to
+`TransitionToInServiceAsync`: if any workflow on the version has
+structural problems (incomplete nodes, orphans, no Start), the
+transition is refused.
+
+The existing test suite for `TransitionToInServiceAsync` had four
+happy-path tests covering:
+  - basic promotion from Draft
+  - atomic supersession of prior In Service
+  - NotFound rejection
+  - RejectedNotDraft rejection
+  - other-types-not-touched
+
+All four created a Request Type, a Draft version, and immediately
+called `TransitionToInServiceAsync`. **None of them created any
+workflows on the version.** The new validation pre-check returns
+zero issues when the version has no workflows; promotion proceeds
+normally. The existing tests kept passing.
+
+If I'd left the test suite as-is and shipped the validator with
+a bug — e.g., the SQL counted any non-NULL `path1_node_id` as
+"missing" — the existing tests would have happily passed. The
+validator could be silently allowing broken workflows through
+and the green test bar would not have caught it.
+
+**The new coverage is the only coverage.** Seven tests added in
+Chunk 10 specifically build workflows with each issue kind (and
+combinations) and assert the validator catches them. Without
+those, the validator's behavior is essentially uncovered.
+
+**The pattern to watch for**: when adding a new precondition to
+a method, ask "do my existing tests exercise this precondition?"
+If they all happen to be in the trivial case where the
+precondition can't fail, they don't cover the new behavior — they
+cover the absence of the new behavior. The fix is more tests at
+the precondition boundary, not more confidence in the bar.
+
+This intersects with the test-didn't-run lesson from Chunk 9:
+both are about the assumption "tests passed = behavior covered"
+being too optimistic. Different mechanisms — Chunk 9's test
+apparently didn't run; Chunk 10's tests ran but covered a
+different path than I was changing. Combined principle: a green
+bar tells you the asserted thing didn't break, NOT that all
+behavior was tested. Be deliberate about whether the assertions
+you have actually exercise the code you just wrote.
+
+## 2026-05-24 — Promote an enum to a record without breaking call sites
+
+Chunk 10 needed `TransitionToInServiceAsync` to return both a
+coarse outcome (Succeeded/NotFound/...) AND a list of concrete
+validation issues. The existing return type was a plain enum.
+
+Three ways to add the issue list:
+
+  - **(a)** Keep the enum, add a separate "diagnostics" out-
+    parameter or follow-up call. Caller has to remember to fetch.
+  - **(b)** Switch to a tuple `(Outcome, Issues)`. Loses naming;
+    `Assert.Equal(TransitionToInServiceResult.Succeeded, result)`
+    no longer compiles.
+  - **(c)** Promote the enum to a record with an `Outcome` field
+    + an `Issues` list. Add static factory properties on the
+    record named after the original enum members. Every existing
+    call site that read `TransitionToInServiceResult.Succeeded`
+    keeps compiling and behaving identically.
+
+Went with **(c)**. The pattern:
+
+```csharp
+// Before:
+public enum TransitionToInServiceResult {
+    Succeeded, NotFound, RejectedNotDraft
+}
+
+// After:
+public enum TransitionToInServiceOutcome {
+    Succeeded, NotFound, RejectedNotDraft, RejectedIncompleteWorkflow
+}
+
+public sealed record TransitionToInServiceResult(
+    TransitionToInServiceOutcome Outcome,
+    IReadOnlyList<WorkflowIssue> Issues)
+{
+    public static TransitionToInServiceResult Succeeded { get; } =
+        new(TransitionToInServiceOutcome.Succeeded, Array.Empty<WorkflowIssue>());
+
+    public static TransitionToInServiceResult NotFound { get; } =
+        new(TransitionToInServiceOutcome.NotFound, Array.Empty<WorkflowIssue>());
+
+    public static TransitionToInServiceResult RejectedNotDraft { get; } =
+        new(TransitionToInServiceOutcome.RejectedNotDraft, Array.Empty<WorkflowIssue>());
+
+    public static TransitionToInServiceResult RejectedIncompleteWorkflow(
+        IReadOnlyList<WorkflowIssue> issues) =>
+        new(TransitionToInServiceOutcome.RejectedIncompleteWorkflow, issues);
+}
+```
+
+The static properties are singletons sharing one `Array.Empty<>`
+instance. `Assert.Equal(TransitionToInServiceResult.Succeeded,
+result)` still compiles AND still passes because record value
+equality returns true when both operands reference the same
+instance.
+
+Two call-site updates were still required:
+  - **Switch expressions** keyed on the old enum had to switch on
+    `result.Outcome` instead of `result`. The compiler-error
+    surface is clear.
+  - **The UI caller** added a new case for the new outcome value
+    (`RejectedIncompleteWorkflow`). This is the same shape of
+    update you'd do for any new enum value.
+
+**When this pattern is right**: when the existing enum has
+broad caller spread, when the data you're adding is optional
+(empty list / nullable diagnostics), and when callers reading
+only the outcome are most common. If callers were primarily
+consuming structured data, the static-properties hack would feel
+weirder than just switching them all to a tuple or a record up
+front.
+
+**When it's wrong**: if the type change requires every caller to
+care about the new data anyway. Then the static-properties
+window-dressing is just delaying the readability cost. Bite the
+bullet and migrate.
+

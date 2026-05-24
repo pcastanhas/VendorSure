@@ -428,9 +428,9 @@ else
         try
         {
             var result = await VersionRepository.TransitionToInServiceAsync(versionId);
-            switch (result)
+            switch (result.Outcome)
             {
-                case TransitionToInServiceResult.Succeeded:
+                case TransitionToInServiceOutcome.Succeeded:
                     Logger.LogInformation(
                         "Version id={VersionId} placed in service on request type {TypeId}.",
                         versionId, _type?.Id);
@@ -443,18 +443,32 @@ else
                     _selectedVersion = _versions.FirstOrDefault(v => v.Id == versionId);
                     break;
 
-                case TransitionToInServiceResult.NotFound:
+                case TransitionToInServiceOutcome.NotFound:
                     Snackbar.Add(
                         "Cannot place in service: version no longer exists.",
                         Severity.Warning);
                     await LoadAsync();
                     break;
 
-                case TransitionToInServiceResult.RejectedNotDraft:
+                case TransitionToInServiceOutcome.RejectedNotDraft:
                     Snackbar.Add(
                         "Cannot place in service: another caller already changed this version's state.",
                         Severity.Warning);
                     await LoadAsync();
+                    break;
+
+                case TransitionToInServiceOutcome.RejectedIncompleteWorkflow:
+                    // The version has one or more workflows with structural
+                    // problems that promotion-time validation refuses. Show
+                    // a longer-lived snackbar listing the first few issues
+                    // so the user knows what to fix. The full list is in
+                    // result.Issues; we cap the message at three to keep it
+                    // readable.
+                    Snackbar.Add(
+                        BuildIncompleteWorkflowMessage(result.Issues),
+                        Severity.Warning,
+                        config => { config.RequireInteraction = true; });
+                    // No LoadAsync — the version is unchanged in the DB.
                     break;
             }
         }
@@ -475,5 +489,44 @@ else
         RequestState.InService => "In Service",
         RequestState.Superseded => "Superseded",
         _ => state.ToString(),
+    };
+
+    /// <summary>
+    /// Format a workflow-issue list for the rejection snackbar. Caps at
+    /// three issues + an "and N more" suffix to keep the message
+    /// readable; the user can fix the visible ones, re-try, and see the
+    /// next batch if there are more.
+    /// </summary>
+    private static string BuildIncompleteWorkflowMessage(IReadOnlyList<WorkflowIssue> issues)
+    {
+        if (issues.Count == 0)
+        {
+            // Defensive — shouldn't happen but don't surface an empty
+            // rejection message.
+            return "Cannot place in service: workflow validation failed.";
+        }
+
+        var visible = issues.Take(3).Select(DescribeIssue).ToList();
+        var summary = string.Join("; ", visible);
+        if (issues.Count > 3)
+        {
+            summary += $" (and {issues.Count - 3} more)";
+        }
+        return $"Cannot place in service. {summary}.";
+    }
+
+    private static string DescribeIssue(WorkflowIssue issue) => issue.Kind switch
+    {
+        WorkflowIssueKind.NoStartNode =>
+            $"workflow '{issue.WorkflowName}' has no Start node",
+        WorkflowIssueKind.MissingPath1 =>
+            $"workflow '{issue.WorkflowName}' has a node (#{issue.NodeId}) missing its next step",
+        WorkflowIssueKind.DecisionMissingPath1 =>
+            $"workflow '{issue.WorkflowName}' has a Decision (#{issue.NodeId}) missing its left branch",
+        WorkflowIssueKind.DecisionMissingPath2 =>
+            $"workflow '{issue.WorkflowName}' has a Decision (#{issue.NodeId}) missing its right branch",
+        WorkflowIssueKind.OrphanNode =>
+            $"workflow '{issue.WorkflowName}' has an orphan node (#{issue.NodeId})",
+        _ => $"workflow '{issue.WorkflowName}' has an unspecified problem",
     };
 }

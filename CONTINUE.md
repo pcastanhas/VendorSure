@@ -4,10 +4,15 @@
 
 ## Where we are
 
-**Phase 5 in progress.** Chunks 1-7 and 9 done (Chunk 8 deferred
-pending user review of need). Chunk 7 was the design pivot from
-Chunk 6's "free drop palette" model to the +-button graph
-construction model; Chunk 9 added the matching deletion surface:
+**Phase 5 complete.** Chunks 1-7, 9, and 10 done. Chunk 8 (node
+property editor) was deferred pending review of whether it's
+needed — `WorkflowNodeRepository.UpdateAsync` handles all the
+property fields, so the only missing piece is the side-panel UI.
+
+Chunk 7 was the design pivot from Chunk 6's "free drop palette"
+model to the +-button graph construction model; Chunk 9 added
+the matching deletion surface; Chunk 10 closed Phase 5 with
+promotion-time validation and end-of-phase rollup.
 
   - Every workflow has a Start node, auto-created in
     `WorkflowDefinitionRepository.CreateAsync` inside the same
@@ -27,43 +32,50 @@ construction model; Chunk 9 added the matching deletion surface:
     atomically inserts + wires + renumbers (uses the existing
     `RenumberSubtreeAsync` recursive CTE under the hood).
   - The schema still permits orphan nodes (level=0, no upstream
-    FK); the UI just doesn't create them. Old workflows from the
-    Chunk 6 surface that have orphans are dev artifacts.
-  - **Schema follow-up**: `CK_workflow_nodes_decision_both_edges`
-    dropped (a Decision used to require both path FKs at insert
-    time). Chunk 10's promotion gate is now the sole enforcer
-    of "every Decision has both children." Defense-in-depth at
-    the data layer is gone for this rule; the cost was a hard
-    block on the new model, since Decisions necessarily exist
-    with one or zero children mid-design.
-  - **Chunk 9** added X (delete) buttons in the top-left of every
+    FK); the UI doesn't create them under normal operation; the
+    promotion-time validator now refuses any workflow that has
+    them (Chunk 10).
+  - **Schema follow-up to Chunk 7**: `CK_workflow_nodes_decision_both_edges`
+    dropped. Chunk 10's promotion gate is the sole enforcer of
+    "every Decision has both children."
+  - **Chunk 9**: X (delete) buttons in the top-left of every
     non-Start node, plus a confirmation dialog that branches:
       - Terminal or childless Process: plain confirm.
-      - Process with descendants: two buttons — splice into
-        parent (`DeleteAndSpliceAsync` lifts the single child up
-        one level, renumbers the surviving subtree via the same
-        CTE) or delete subtree (`DeleteSubtreeAsync` recursively
-        removes the node and all descendants).
+      - Process with descendants: splice into parent
+        (`DeleteAndSpliceAsync` lifts the single child up one
+        level, renumbers via existing CTE) or delete subtree
+        (`DeleteSubtreeAsync` recursively removes the node and
+        all descendants).
       - Decision: single destructive button, no splice option
-        (two subtrees can't cleanly merge). Both-subtree count
-        surfaced in the confirm copy.
+        (two subtrees can't cleanly merge).
     Start delete is blocked — the X button isn't even rendered
     on Start.
-
-Test surface: 158 → 194 (+1 workflow def repo, +19 node repo
-Chunk 7, +15 node repo Chunk 9, +1 regression test for the
-two-batch-CTE bug fix below).
-
   - **Chunk 9 bug fix**: `DeleteSubtreeAsync` had a data-loss
     bug — deleting a Decision left its children behind as
-    orphans. Root cause: the original implementation ran two
-    separate `ExecuteAsync` calls with the same recursive CTE
-    (one to null intra-subtree FKs, one to DELETE). The first
-    statement nulled the FKs the second's CTE walk depended on,
-    so the second walk found only the seed and deleted only one
-    row. Fix: materialize subtree IDs into a `@ids` table
-    variable in one batch up front, then reference it for both
-    operations. See LessonsLearned entry 20.
+    orphans. Two separate `ExecuteAsync` calls with the same
+    recursive CTE: the first nulled the FKs the second's walk
+    depended on. Fixed by materializing subtree IDs into a `@ids`
+    table variable in one batch. See LessonsLearned entry 20.
+  - **Chunk 10**: promotion-time validation in
+    `TransitionToInServiceAsync`. Refuses `Draft → InService`
+    when any workflow on the version has:
+      - a non-terminal node missing required children (Decision
+        needs both branches; Start/Process need path1),
+      - an orphan node (no incoming path FK, and not the
+        workflow's Start),
+      - a workflow with NULL start_node_id.
+    `TransitionToInServiceResult` promoted from enum to record
+    with `Outcome` + `Issues` list; UI surfaces the first three
+    issues in a sticky snackbar. End-of-phase rollup: removed the
+    temporary node-list readout below the canvas, updated
+    PLAN.md to reflect what actually shipped vs the provisional
+    chunk list, polished CONCEPT.md. Inline incomplete-node
+    badges deferred — the dashed dangling-edge cues from Chunk 7
+    are sufficient at our scale.
+
+Test surface: 158 → 201 (+1 workflow def repo, +19 node repo
+Chunk 7, +15 node repo Chunk 9, +1 regression test for Chunk 9
+bug fix, +7 version repo Chunk 10).
 
 Phase 5 design settled before code (post-Chunk-7 shift):
   - **D3.js** for the SVG canvas. No React, no build pipeline,
@@ -105,7 +117,7 @@ Read these to get oriented:
   §3.1 and §3.2 still scheduled for refresh in Phase 6 / Phase 9.
 - `BUILD.md` — how to build/run locally. "What's currently built
   (Phases 1-4)" summarises the shipped surface.
-- `LessonsLearned.md` — twenty entries.
+- `LessonsLearned.md` — twenty-two entries.
 - `docs/REMOVE-BEFORE-PROD.md` — debug identity shim cutover checklist.
 
 ## Approach rules (locked in during design)
@@ -193,66 +205,73 @@ and `dotnet test`, reports back.
 
 ## Suggested next session
 
-**Phase 5 / Chunk 10 — Promotion-time validation + end-of-phase rollup.**
+**Phase 5 is complete.** Next is **Phase 6 — AI Service + Storage +
+Submission Portal**, per `docs/PLAN.md`. Phase 6 is also large
+and the chunk list there is provisional. Read the Phase 6 section
+in PLAN.md to start the design conversation before code.
 
-The version's `Draft → InService` transition
-(`RequestTypeVersionRepository.TransitionToInServiceAsync` from
-Phase 4) must refuse promotion when any workflow on the version
-has a malformed graph: every non-terminal node must have its
-required children present.
+A few items from Phase 5 are deliberately left open and worth
+deciding on before or during early Phase 6:
 
-This is **load-bearing** because the schema CHECK that used to
-enforce "every Decision has both path1 and path2 set" was dropped
-in Chunk 7's bug-fix follow-up. Defense-in-depth is gone at the
-data layer; the promotion gate is now the sole enforcer.
+**Chunk 8 — Node property editor (deferred from Phase 5).**
 
-Concretely:
-  - SQL pre-check in `TransitionToInServiceAsync`: count
-    non-terminal nodes with missing required children. The rules:
-      - Decision: needs both path1 and path2.
-      - Start, Process: needs path1.
-      - Terminals: no children.
-    If any → return a new outcome enum value
-    (`RejectedIncompleteWorkflow` or similar) with the offending
-    workflow names attached, or just the count for a generic
-    "X workflows have incomplete graphs" message.
-  - Inline incomplete-badge rendering on the canvas (the
-    designer-page side): the JS module shows a small yellow !
-    on any node missing its required children. Helps the user
-    fix things before trying to promote. The dashed-edge-to-a-+
-    pattern from Chunk 7's polish already conveys this visually
-    for empty slots; the badge would be a separate cue for nodes
-    in an already-incomplete state (e.g. a Decision with only
-    one branch where the user might miss the dashed edge in a
-    busy canvas).
-  - End-of-phase rollup:
-      - Update PLAN.md to reflect what actually shipped vs the
-        provisional Phase 5 chunk list.
-      - CONCEPT.md final polish.
-      - Remove the temporary node-list readout table below the
-        canvas. The visual is enough now that delete and insert
-        both work end-to-end.
-
-**Chunk 8 — Node property editor (deferred).**
-
-Deferred at user request pending review of whether it's needed
-for Phase 5 close-out. Node property editor would be the side
-panel that lets users set prompt_text, approver_group_id,
+Side panel that lets users set prompt_text, approver_group_id,
 stale_threshold_days, stale_message_text, notes on individual
-nodes. `UpdateAsync` already shipped in Chunk 3 and handles all
-these fields, so the repo work is done; what remains is purely
-UI:
+nodes. The repo's `UpdateAsync` already handles all these fields;
+what's missing is purely UI:
   - Body-click handler on each node `<g>` in the JS module.
   - `[JSInvokable] OnNodeClickedAsync(nodeId)` opens a side panel.
   - Field shape depends on node type (Decision shows path1/path2
-    prompt; non-Decision shows only prompt).
+    prompts; non-Decision shows only the single prompt).
   - Auto-save on blur (locked design).
   - Selected-node visual highlight on the canvas.
 
-If we decide we don't need it for v1, the editable fields stay
-at their defaults until someone manually edits the DB rows. The
-workflow engine (Phase 6+) will run either way.
+If we don't ship this, every node uses default values until
+someone edits the DB rows directly. The workflow engine in Phase
+6 still runs, but every Process prompt will be empty and every
+approver group will be null. That's probably not viable for v1;
+plan to pick this up early in Phase 6 if it isn't done first.
 
-**Chunk 9 — Delete affordances (DONE, see Where We Are).**
+**CI not wired.** Tests run on the developer's machine via
+`dotnet test`. A buggy Chunk 9 commit shipped because the test
+that should have caught the bug existed but apparently wasn't
+executed before commit. Wiring even a minimal GitHub Action that
+runs `dotnet build` + `dotnet test` on push would prevent this
+class of failure. The infrastructure tests require a live DB
+connection so CI also needs a SQL Server (LocalDB? containerized
+SQL? Azure SQL test instance?) — non-trivial but worth scoping.
+
+**Inline incomplete-node badges.** Skipped in Chunk 10 because
+the dashed-dangling-edge cues from Chunk 7 are visible enough at
+our scale. If a busier-canvas workflow shows up where the eye
+can't easily spot dashed lines, add the yellow `!` badge then.
+
+**Dev DB cleanup.** Pre-Chunk-7 workflows may have leftover orphan
+nodes that the new promotion gate will refuse. One-time cleanup
+when needed:
+
+```sql
+-- Find them
+SELECT n.id, n.workflow_definition_id, n.node_type_id, n.execution_level
+FROM dbo.workflow_nodes n
+INNER JOIN dbo.workflow_definitions wd ON wd.id = n.workflow_definition_id
+WHERE n.id <> ISNULL(wd.start_node_id, -1)
+  AND NOT EXISTS (
+    SELECT 1 FROM dbo.workflow_nodes p
+    WHERE p.workflow_definition_id = n.workflow_definition_id
+      AND (p.path1_node_id = n.id OR p.path2_node_id = n.id)
+  );
+
+-- Delete them (verify the SELECT first):
+DELETE n
+FROM dbo.workflow_nodes n
+INNER JOIN dbo.workflow_definitions wd ON wd.id = n.workflow_definition_id
+WHERE n.id <> ISNULL(wd.start_node_id, -1)
+  AND NOT EXISTS (
+    SELECT 1 FROM dbo.workflow_nodes p
+    WHERE p.workflow_definition_id = n.workflow_definition_id
+      AND (p.path1_node_id = n.id OR p.path2_node_id = n.id)
+  );
+```
 
 PAT note: each session, user provides a short-lived PAT for the repo.

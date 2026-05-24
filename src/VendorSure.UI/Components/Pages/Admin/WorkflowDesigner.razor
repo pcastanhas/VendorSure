@@ -40,12 +40,19 @@
           (DeleteAndSpliceAsync) or delete subtree (DeleteSubtreeAsync).
         - Terminal or childless Process: single confirm button.
 
-      A temporary node-list table below the canvas dumps id / type /
-      level / paths for cross-reference during dev. Slated for removal
-      at end of Phase 5.
+      Chunk 10 closed Phase 5: the temporary node-list readout
+      below the canvas was removed (the visual is enough), and
+      promotion-time validation lives in
+      RequestTypeVersionRepository.TransitionToInServiceAsync.
+      The designer page doesn't surface incomplete-node badges —
+      the dashed dangling edges + the eventual rejection snackbar
+      on promote are the cues. If a busier-canvas use case
+      surfaces in the future, add badges then.
 
-    Still ahead: node property editor (Chunk 8 — deferred pending
-    user review), promotion-time validation (Chunk 10).
+    Chunk 8 (node property editor) was deferred from Phase 5
+    pending review of need; the workflow engine (Phase 6+) will
+    run with default property values until/unless the editor
+    ships.
 *@
 
 @page "/admin/request-types/{TypeId:int}/workflows/{WorkflowId:int}/designer"
@@ -334,104 +341,11 @@ else
         </DialogActions>
     </MudDialog>
 
-    @* --- TEMPORARY: node-list test affordance ----------------------------
-       Provides a textual readout of the workflow's nodes so we can
-       eyeball repository behavior (renumber correctness, path FKs,
-       start_node_id) while the canvas is being built out in Chunks
-       5-10. Tagged for removal at end of Phase 5 when the canvas
-       fully replaces this. ---------------------------------------------- *@
-    <MudPaper Class="pa-3" Outlined="true">
-        <MudStack Row="true" AlignItems="AlignItems.Center" Class="mb-2">
-            <MudText Typo="Typo.subtitle2" Class="mud-text-secondary">
-                Nodes (temporary readout — removed at end of Phase 5)
-            </MudText>
-            <MudSpacer />
-            <MudText Typo="Typo.caption" Class="mud-text-secondary">
-                start_node_id =
-                @if (_workflow.StartNodeId is int startId)
-                {
-                    <code>@startId</code>
-                }
-                else
-                {
-                    <em>null</em>
-                }
-            </MudText>
-        </MudStack>
-
-        @if (_nodes.Count == 0)
-        {
-            <MudText Typo="Typo.body2" Class="mud-text-disabled">
-                This workflow has no nodes yet.
-            </MudText>
-        }
-        else
-        {
-            <MudSimpleTable Dense="true" Hover="true" Elevation="0">
-                <thead>
-                    <tr>
-                        <th>id</th>
-                        <th>node type</th>
-                        <th>block id</th>
-                        <th>level</th>
-                        <th>path1</th>
-                        <th>path2</th>
-                        <th>prompt</th>
-                    </tr>
-                </thead>
-                <tbody>
-                    @foreach (var n in _nodes)
-                    {
-                        <tr>
-                            <td><code>@n.Id</code></td>
-                            <td>@NodeTypeLabel(n.NodeTypeId)</td>
-                            <td>
-                                @if (n.BlockCatalogId is int b)
-                                {
-                                    <code>@b</code>
-                                }
-                                else
-                                {
-                                    <span class="mud-text-disabled">—</span>
-                                }
-                            </td>
-                            <td><code>@n.ExecutionLevel</code></td>
-                            <td>
-                                @if (n.Path1NodeId is int p1)
-                                {
-                                    <code>→ @p1</code>
-                                }
-                                else
-                                {
-                                    <span class="mud-text-disabled">—</span>
-                                }
-                            </td>
-                            <td>
-                                @if (n.Path2NodeId is int p2)
-                                {
-                                    <code>→ @p2</code>
-                                }
-                                else
-                                {
-                                    <span class="mud-text-disabled">—</span>
-                                }
-                            </td>
-                            <td>
-                                @if (!string.IsNullOrEmpty(n.PromptText))
-                                {
-                                    <span class="mud-text-secondary">@n.PromptText</span>
-                                }
-                                else
-                                {
-                                    <span class="mud-text-disabled">—</span>
-                                }
-                            </td>
-                        </tr>
-                    }
-                </tbody>
-            </MudSimpleTable>
-        }
-    </MudPaper>
+    @* The temporary node-list readout that lived here through Chunks
+       5-10 was removed at end of Phase 5 (Chunk 10 rollup). The canvas
+       is now the sole visual representation of a workflow. If we need
+       a textual dump again for debugging, the previous version is in
+       git history under commits up to 7f50ec7. *@
 }
 
 @code {

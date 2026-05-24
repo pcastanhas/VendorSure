@@ -262,76 +262,109 @@ Standard.
 
 ## Phase 5 — Workflow Designer
 
-**Goal.** Within a Request Type Draft, the Workflows tab opens a canvas where
-a user can lay out a workflow graph: drag blocks from a palette, draw edges,
-edit node properties, save the graph.
+**Goal.** Within a Request Type Draft, a "Workflows" tab opens a canvas
+where compliance can lay out a workflow graph: add blocks via on-node
++ affordances, edit structure with X delete buttons, save the graph,
+promote to In Service when complete.
 
-**Risk note.** This is the biggest phase by far and the only one with
-unfamiliar UI work (JS interop for the canvas library). Chunk granularity
-here is genuinely uncertain; the chunk list below is a first guess and
-expected to evolve.
+**Risk note (as written before Phase 5).** This was the biggest phase
+by far and the only one with unfamiliar UI work (JS interop for the
+canvas). Chunk granularity was uncertain; the original chunk list was
+a first guess. The notes below record what shipped, which differed
+significantly from the original plan.
 
-### Chunks (provisional)
+### Chunks as shipped
 
-1. **WorkflowDefinition + WorkflowNode repositories.** CRUD for the static
-   graph. Nodes carry node_type_id, block_catalog_id (or null), path
-   pointers, prompts, stale threshold.
+The original provisional chunk list (palette + drag-to-add → edge
+drawing → property editor → save/load) was superseded by a design
+pivot in Chunk 7. The shipped sequence:
 
-2. **Block catalog + Artifact catalog repositories + admin viewer.** Read-
-   only first; blocks are IT-authored externally. Add a `/admin/blocks` page
-   that lists registered blocks with their declared I/O artifacts.
-   **Test:** see seeded blocks (a small handful inserted manually for
-   testing).
+1. **Chunks 1-3 — WorkflowDefinition + WorkflowNode + Block catalog
+   repositories.** CRUD for the static graph. Nodes carry
+   node_type_id, block_catalog_id (or null), path pointers, prompts,
+   stale threshold. Block catalog seeded manually.
 
-3. **Canvas library decision + spike.** Pick a JS canvas library (likely
-   `react-flow` or `jsPlumb` Community or a pure-SVG approach). Spike a
-   stand-alone HTML file with a working canvas before integrating into
-   Blazor.
-   **Test:** load the spike file in a browser, drag nodes around, draw edges.
-   The spike itself is a throwaway but tells us whether the library works.
+2. **Chunk 4 — Designer page shell.** Route
+   `/admin/request-types/{typeId}/workflows/{workflowId}/designer`.
+   Loads the type + workflow + nodes + blocks. Read-only banner when
+   the parent version isn't Draft.
 
-4. **Blazor JS interop wrapper.** A `WorkflowDesignerCanvas` Blazor component
-   that wraps the canvas library via JS interop. Bidirectional: Blazor pushes
-   the graph in, JS calls back to Blazor on user edits.
-   **Test:** mount the component on a test page (`/test/canvas`), load a
-   hand-coded graph, observe rendering and edit callbacks.
+3. **Chunk 5 — D3 interop spike.** Pure-SVG canvas via D3 loaded
+   from a vendored npm dep. JS module renders the graph; Blazor owns
+   the data.
 
-5. **Palette + drop-onto-canvas.** Left rail shows draggable items: Start,
-   Terminal (with Approved/Rejected/Cancelled choice), and one block per
-   `block_catalog` row. Drag onto canvas creates a node.
-   **Test:** drag a Start onto the canvas; drag a Process block; see them
-   rendered.
+4. **Chunk 6 — Palette + drag-to-add nodes.** Left-rail palette with
+   draggable items. Drop onto canvas creates a `workflow_nodes` row
+   at execution_level=0 with both path FKs null (orphan-node posture).
+   **This chunk was effectively reverted in Chunk 7.**
 
-6. **Edge drawing.** Click-and-drag from a node's output port to another
-   node's input port creates an edge. Decision nodes have two output ports
-   (path1 / path2); process and start have one; terminals have none.
-   **Test:** wire Start → Process → Approved, save, reload, see graph
-   re-rendered.
+5. **Chunk 7 — Design pivot to +-button graph construction.**
+   Replaced free-drag palette with a graph-construction model rooted
+   at Start. Every workflow auto-creates a Start node in the workflow
+   create transaction. JS draws + buttons on every non-terminal node's
+   open slots; clicking + opens a block-picker dialog. New repo
+   method `InsertChildAsync` atomically inserts + wires + renumbers.
+   Two follow-up commits: dropped `CK_workflow_nodes_decision_both_edges`
+   (move "Decision has both children" from edit-time to promotion-time)
+   and a layout polish pass adding subtree-width-aware placement plus
+   classic-flowchart L-shape edges from Decision vertices.
 
-7. **Node property editor.** Click a node → side panel shows editable
-   properties: prompt text, path labels (decision), stale threshold,
-   approver group (if applicable).
-   **Test:** edit a process node's stale threshold, save, reload, see
-   persisted value.
+6. **Chunk 8 — Node property editor. DEFERRED.** UI to edit prompt
+   text, approver group, stale threshold per node. The repo's
+   UpdateAsync already supports all the property fields; what's
+   missing is the side-panel UI. Deferred at user request pending
+   review of whether it's needed for Phase 5 close-out — the workflow
+   engine (Phase 6+) runs without it using default property values.
 
-8. **Save + load graph.** Save serializes the canvas state into
-   `workflow_nodes` rows (including coordinates so the layout persists).
-   Load reads those rows and re-creates the canvas state.
-   **Test:** lay out a workflow, save, close, reopen, see same layout.
+7. **Chunk 9 — Delete affordances.** X (delete) button in the top-left
+   of every non-Start node, opening a confirmation dialog that
+   branches on node type and descendant count. Two new repo methods:
+   `DeleteSubtreeAsync` (recursive cascade) and `DeleteAndSpliceAsync`
+   (lift single child up + renumber). Decision delete is subtree-only
+   (two subtrees can't cleanly merge); Process delete offers splice
+   vs subtree; terminal delete is plain confirm; Start delete is
+   blocked. Followed by a bug-fix commit (the recursive CTE was
+   destroying its own walk data across two ExecuteAsync calls).
 
-9. **Designer integration into Request Type editor.** The Workflows tab in
-   Phase 4 now hosts the designer. "New Workflow" button creates an empty
-   `workflow_definitions` row; clicking an existing workflow opens its graph.
-   **Test:** from a Request Type Draft, create a workflow, design it, save,
-   reload type, see workflow listed and openable.
+8. **Chunk 10 — Promotion-time validation + end-of-phase rollup.**
+   `TransitionToInServiceAsync` now refuses promotion when any
+   workflow on the version has structural issues: non-terminal nodes
+   missing required children (Decision needs both branches; Start
+   and Process need their single path1), orphan nodes (unreachable
+   from the workflow's Start), or workflows with NULL start_node_id.
+   `TransitionToInServiceResult` promoted from enum to record with
+   `Outcome` + `Issues` list. UI shows the first three issues in a
+   sticky snackbar. Temporary node-list readout below the canvas
+   removed. Inline incomplete-node badges deferred — the dashed
+   dangling-edge cue from Chunk 7 is sufficient for our scale.
 
 ### Phase 5 doc commit
 
-- BUILD.md updated with anything about the canvas library / JS interop.
-- CONTINUE.md updated.
-- CONCEPT.md §3.3 updated with how the designer actually works.
-- LessonsLearned.md will likely grow most here.
-- PLAN.md updated.
+- CONTINUE.md updated each chunk; final state reflects Chunks 1-10
+  done (Chunk 8 deferred).
+- CONCEPT.md §"Workflow designer" rewritten in the Chunk 7 commit to
+  reflect the +-button construction model and promotion-time
+  validation posture.
+- LessonsLearned.md grew substantially through Phase 5: ten new
+  entries covering the design pivot rationale, the recursive-CTE
+  patterns and bugs, the MudBlazor popover-vs-dialog decision, the
+  schema-CHECK-vs-promotion-gate trade-off, and the post-mortem on
+  the orphan bug.
+- PLAN.md (this file) — Phase 5 section updated to reflect what
+  actually shipped.
+
+### Outstanding from Phase 5 (carried forward, NOT blocking)
+
+- **Chunk 8 deferred.** Side-panel node property editor. Pickup
+  whenever it's actually needed.
+- **CI not wired.** Tests run on the developer's machine via
+  `dotnet test`. A buggy Chunk 9 commit shipped because the test
+  that should have caught the bug existed but apparently wasn't
+  executed before commit. Wiring even a minimal GitHub Action would
+  prevent this class of failure. Worth doing before Phase 6.
+- **Inline incomplete-node badges.** Skipped in Chunk 10 because the
+  dashed-dangling-edge cues from Chunk 7 are visible enough at our
+  scale. If a busier-canvas workflow shows up, add badges then.
 
 ---
 

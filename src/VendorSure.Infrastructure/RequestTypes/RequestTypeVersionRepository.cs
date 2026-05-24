@@ -169,6 +169,109 @@ internal sealed class RequestTypeVersionRepository : IRequestTypeVersionReposito
                     : TransitionToInServiceResult.NotFound;
             }
 
+            // 1a. Workflow validation. The version is Draft and locked.
+            //     Walk every workflow on it and find structural problems:
+            //       - non-terminal node with a NULL required out-edge
+            //         (Decision needs both path1/path2; Start/Process
+            //         need path1);
+            //       - orphan node (no incoming path FK AND not the
+            //         workflow's start_node);
+            //       - workflow with NULL start_node_id (defensive — auto-
+            //         Start in Chunk 7 should prevent this).
+            //
+            // Returns one row per concrete problem. Empty result = clean,
+            // proceed with promotion. Non-empty = roll back, return
+            // RejectedIncompleteWorkflow with the list.
+            //
+            // Why this lives here and not in the workflow repo: it's the
+            // promotion rule, not a workflow-repo invariant. Workflows
+            // themselves are happy to sit in Draft with half-wired graphs
+            // forever; only the Draft -> InService transition refuses
+            // them.
+            var issues = (await connection.QueryAsync<WorkflowIssueRow>(
+                new CommandDefinition(
+                    @"
+-- Combined diagnostic query. Each UNION ALL clause produces zero or
+-- more rows of a specific failure kind. Aggregated and ordered for
+-- stable error messages.
+
+-- Workflow has no start_node_id. Shouldn't fire post-Chunk-7 but
+-- the schema permits it.
+SELECT wd.id            AS WorkflowId,
+       wd.name          AS WorkflowName,
+       'NoStartNode'    AS Kind,
+       CAST(NULL AS int) AS NodeId
+FROM dbo.workflow_definitions wd
+WHERE wd.request_type_version_id = @versionId
+  AND wd.start_node_id IS NULL
+
+UNION ALL
+
+-- Start or Process node missing path1.
+SELECT wd.id AS WorkflowId, wd.name AS WorkflowName,
+       'MissingPath1' AS Kind, n.id AS NodeId
+FROM dbo.workflow_nodes n
+INNER JOIN dbo.workflow_definitions wd ON wd.id = n.workflow_definition_id
+WHERE wd.request_type_version_id = @versionId
+  AND n.node_type_id IN (1, 2)   -- Start, Process
+  AND n.path1_node_id IS NULL
+
+UNION ALL
+
+-- Decision node missing path1.
+SELECT wd.id AS WorkflowId, wd.name AS WorkflowName,
+       'DecisionMissingPath1' AS Kind, n.id AS NodeId
+FROM dbo.workflow_nodes n
+INNER JOIN dbo.workflow_definitions wd ON wd.id = n.workflow_definition_id
+WHERE wd.request_type_version_id = @versionId
+  AND n.node_type_id = 3   -- Decision
+  AND n.path1_node_id IS NULL
+
+UNION ALL
+
+-- Decision node missing path2.
+SELECT wd.id AS WorkflowId, wd.name AS WorkflowName,
+       'DecisionMissingPath2' AS Kind, n.id AS NodeId
+FROM dbo.workflow_nodes n
+INNER JOIN dbo.workflow_definitions wd ON wd.id = n.workflow_definition_id
+WHERE wd.request_type_version_id = @versionId
+  AND n.node_type_id = 3   -- Decision
+  AND n.path2_node_id IS NULL
+
+UNION ALL
+
+-- Orphan nodes: not the workflow's start_node, and not referenced
+-- by any other node's path1/path2 inside the same workflow.
+SELECT wd.id AS WorkflowId, wd.name AS WorkflowName,
+       'OrphanNode' AS Kind, n.id AS NodeId
+FROM dbo.workflow_nodes n
+INNER JOIN dbo.workflow_definitions wd ON wd.id = n.workflow_definition_id
+WHERE wd.request_type_version_id = @versionId
+  AND n.id <> ISNULL(wd.start_node_id, -1)
+  AND NOT EXISTS (
+      SELECT 1
+      FROM dbo.workflow_nodes p
+      WHERE p.workflow_definition_id = n.workflow_definition_id
+        AND (p.path1_node_id = n.id OR p.path2_node_id = n.id)
+  )
+
+ORDER BY WorkflowName, Kind, NodeId;",
+                    new { versionId },
+                    transaction, cancellationToken: ct))).ToList();
+
+            if (issues.Count > 0)
+            {
+                transaction.Rollback();
+                var mapped = issues
+                    .Select(r => new WorkflowIssue(
+                        r.WorkflowId,
+                        r.WorkflowName,
+                        Enum.Parse<WorkflowIssueKind>(r.Kind),
+                        r.NodeId))
+                    .ToList();
+                return TransitionToInServiceResult.RejectedIncompleteWorkflow(mapped);
+            }
+
             // 2. Demote the prior In Service of this type (if any). The
             //    schema doesn't enforce at-most-one-InService-per-type so
             //    in pathological data we might demote several; that's
@@ -265,6 +368,20 @@ internal sealed class RequestTypeVersionRepository : IRequestTypeVersionReposito
     {
         public int Id { get; init; }
         public int Version { get; init; }
+    }
+
+    /// <summary>
+    /// Dapper projection for the workflow-validation diagnostic query in
+    /// <see cref="TransitionToInServiceAsync"/>. <c>Kind</c> arrives as
+    /// the string code from each UNION ALL branch; the caller parses it
+    /// to the <see cref="WorkflowIssueKind"/> enum.
+    /// </summary>
+    private sealed class WorkflowIssueRow
+    {
+        public int WorkflowId { get; init; }
+        public string WorkflowName { get; init; } = string.Empty;
+        public string Kind { get; init; } = string.Empty;
+        public int? NodeId { get; init; }
     }
 
     private static RequestTypeVersion ToEntity(VersionRow row) => new()

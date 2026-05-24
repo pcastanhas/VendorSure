@@ -27,7 +27,7 @@ public enum UpdateRequestTypeVersionResult
 }
 
 /// <summary>Outcome of <see cref="IRequestTypeVersionRepository.TransitionToInServiceAsync"/>.</summary>
-public enum TransitionToInServiceResult
+public enum TransitionToInServiceOutcome
 {
     /// <summary>
     /// The target version is now In Service. If a prior In Service version
@@ -44,6 +44,85 @@ public enum TransitionToInServiceResult
     /// Drafts can be placed in service.
     /// </summary>
     RejectedNotDraft,
+
+    /// <summary>
+    /// The version has at least one workflow with structural problems —
+    /// nodes missing required children, orphan nodes that aren't reachable
+    /// from Start, or a workflow with no Start at all. The
+    /// <see cref="TransitionToInServiceResult.Issues"/> list spells out
+    /// what to fix.
+    /// </summary>
+    /// <remarks>
+    /// Chunk 7 dropped <c>CK_workflow_nodes_decision_both_edges</c>,
+    /// moving the "every Decision has both children" rule from the data
+    /// layer to here. This outcome is now the sole enforcer of that rule
+    /// plus the matching "Start/Process need their single child" and
+    /// "no orphan nodes" invariants.
+    /// </remarks>
+    RejectedIncompleteWorkflow,
+}
+
+/// <summary>
+/// One concrete problem found by promotion-time validation. Aggregated
+/// inside <see cref="TransitionToInServiceResult"/> when the outcome is
+/// <see cref="TransitionToInServiceOutcome.RejectedIncompleteWorkflow"/>.
+/// </summary>
+/// <param name="WorkflowId">The workflow row that has the problem.</param>
+/// <param name="WorkflowName">Display name of that workflow.</param>
+/// <param name="Kind">What's wrong (see <see cref="WorkflowIssueKind"/>).</param>
+/// <param name="NodeId">
+/// The specific node, when the issue is per-node (incomplete or orphan).
+/// Null for workflow-level issues like <see cref="WorkflowIssueKind.NoStartNode"/>.
+/// </param>
+public sealed record WorkflowIssue(
+    int WorkflowId, string WorkflowName, WorkflowIssueKind Kind, int? NodeId);
+
+public enum WorkflowIssueKind
+{
+    /// <summary>Start or Process node missing path1 (required out-edge).</summary>
+    MissingPath1,
+
+    /// <summary>Decision node missing path1 (left branch).</summary>
+    DecisionMissingPath1,
+
+    /// <summary>Decision node missing path2 (right branch).</summary>
+    DecisionMissingPath2,
+
+    /// <summary>
+    /// Node has no incoming path FK from anywhere in the workflow AND is
+    /// not the workflow's Start. Shouldn't exist in graphs built via the
+    /// UI; flagged loudly here so legacy / regressed data can't be
+    /// promoted.
+    /// </summary>
+    OrphanNode,
+
+    /// <summary>The workflow's <c>start_node_id</c> is NULL.</summary>
+    NoStartNode,
+}
+
+/// <summary>
+/// Result of <see cref="IRequestTypeVersionRepository.TransitionToInServiceAsync"/>.
+/// On success or non-validation rejections (<see cref="TransitionToInServiceOutcome.NotFound"/>,
+/// <see cref="TransitionToInServiceOutcome.RejectedNotDraft"/>) the
+/// <see cref="Issues"/> list is empty. On
+/// <see cref="TransitionToInServiceOutcome.RejectedIncompleteWorkflow"/>
+/// it contains one entry per concrete problem the user has to fix.
+/// </summary>
+public sealed record TransitionToInServiceResult(
+    TransitionToInServiceOutcome Outcome,
+    IReadOnlyList<WorkflowIssue> Issues)
+{
+    public static TransitionToInServiceResult Succeeded { get; } =
+        new(TransitionToInServiceOutcome.Succeeded, Array.Empty<WorkflowIssue>());
+
+    public static TransitionToInServiceResult NotFound { get; } =
+        new(TransitionToInServiceOutcome.NotFound, Array.Empty<WorkflowIssue>());
+
+    public static TransitionToInServiceResult RejectedNotDraft { get; } =
+        new(TransitionToInServiceOutcome.RejectedNotDraft, Array.Empty<WorkflowIssue>());
+
+    public static TransitionToInServiceResult RejectedIncompleteWorkflow(IReadOnlyList<WorkflowIssue> issues) =>
+        new(TransitionToInServiceOutcome.RejectedIncompleteWorkflow, issues);
 }
 
 /// <summary>
