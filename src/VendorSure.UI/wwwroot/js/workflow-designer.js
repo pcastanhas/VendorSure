@@ -56,7 +56,12 @@ const X_RADIUS = 9;              // the X (delete) button — slightly smaller
 const NODE_STYLE = {
     [NODE_TYPE.Start]:     { shape: "oval",    fill: "#4caf50", stroke: "#2e7d32", text: "#fff" },
     [NODE_TYPE.Process]:   { shape: "rect",    fill: "#1976d2", stroke: "#0d47a1", text: "#fff" },
-    [NODE_TYPE.Decision]:  { shape: "diamond", fill: "#ffa726", stroke: "#e65100", text: "#000" },
+    // Decision: was #ffa726 (Material orange 400) with black text — an
+    // outlier among the otherwise-all-white-text node types. Darkened
+    // to orange 800 so white text reads well on it, keeping the diamond
+    // unmistakably "orange" while removing the per-type text-color
+    // inconsistency. Stroke matches the new fill's darker shade.
+    [NODE_TYPE.Decision]:  { shape: "diamond", fill: "#ef6c00", stroke: "#bf360c", text: "#fff" },
     [NODE_TYPE.Approved]:  { shape: "oval",    fill: "#43a047", stroke: "#1b5e20", text: "#fff" },
     [NODE_TYPE.Rejected]:  { shape: "oval",    fill: "#e53935", stroke: "#b71c1c", text: "#fff" },
     [NODE_TYPE.Cancelled]: { shape: "oval",    fill: "#757575", stroke: "#424242", text: "#fff" },
