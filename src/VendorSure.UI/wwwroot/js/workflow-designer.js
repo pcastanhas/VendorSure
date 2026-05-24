@@ -137,7 +137,13 @@ export async function mount(selector, graphData, dotNetRef) {
         .attr("width", width)
         .attr("height", height)
         .attr("viewBox", `0 0 ${width} ${height}`)
-        .style("display", "block");
+        .style("display", "block")
+        // Center the SVG horizontally inside the canvas div. The SVG's
+        // explicit width attribute (above) plus margin: 0 auto on a block
+        // element centers it when the div is wider than the graph. If
+        // the graph is wider than the div, the SVG keeps its full width
+        // and the canvas div's overflow: auto provides horizontal scroll.
+        .style("margin", "0 auto");
 
     // Real edges first so node shapes paint on top.
     svg.append("g")
