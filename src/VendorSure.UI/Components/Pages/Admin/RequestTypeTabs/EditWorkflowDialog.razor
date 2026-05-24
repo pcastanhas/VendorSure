@@ -1,0 +1,91 @@
+@*
+    Create-or-edit dialog for a Workflow Definition.
+
+    Fields: name (required, ≤100 chars, unique within the version) and
+    notes (optional, ≤1000 chars, multi-line). Returns the edited
+    WorkflowDefinition via DialogResult.Ok; the calling page picks
+    CreateAsync vs UpdateAsync based on Id == 0.
+
+    No StartNodeId field — that's set by the designer in Chunk 10
+    when a Start node lands on the canvas. No nodes table editing
+    here either; this is workflow-metadata-only.
+*@
+
+@using VendorSure.Domain.Workflows
+
+<MudDialog>
+    <TitleContent>
+        <MudText Typo="Typo.h6">@TitleText</MudText>
+    </TitleContent>
+    <DialogContent>
+        <MudStack Spacing="3">
+            <MudTextField @bind-Value="_name"
+                          Label="Name"
+                          Variant="Variant.Outlined"
+                          Immediate="true"
+                          Error="@NameIsInvalid"
+                          ErrorText="Name is required."
+                          MaxLength="100"
+                          HelperText="Names must be unique within this Request Type version." />
+
+            <MudTextField @bind-Value="_notes"
+                          Label="Notes (optional)"
+                          Variant="Variant.Outlined"
+                          Lines="4"
+                          MaxLength="1000"
+                          HelperText="Internal notes about when this workflow is selected and what it does." />
+        </MudStack>
+    </DialogContent>
+    <DialogActions>
+        <MudButton OnClick="Cancel">Cancel</MudButton>
+        <MudButton Color="Color.Primary"
+                   Variant="Variant.Filled"
+                   OnClick="Save"
+                   Disabled="@NameIsInvalid">
+            Save
+        </MudButton>
+    </DialogActions>
+</MudDialog>
+
+@code {
+    [CascadingParameter] private IMudDialogInstance MudDialog { get; set; } = default!;
+
+    /// <summary>
+    /// The workflow being edited. <c>Id == 0</c> means "create new" — the
+    /// caller must also have populated <see cref="WorkflowDefinition.RequestTypeVersionId"/>
+    /// on the seed so the parent linkage round-trips.
+    /// </summary>
+    [Parameter, EditorRequired] public WorkflowDefinition Workflow { get; set; } = default!;
+
+    private string _name = string.Empty;
+    private string _notes = string.Empty;
+
+    private bool IsCreate => Workflow.Id == 0;
+    private string TitleText => IsCreate ? "New workflow" : "Edit workflow";
+
+    private bool NameIsInvalid => string.IsNullOrWhiteSpace(_name);
+
+    protected override void OnInitialized()
+    {
+        _name = Workflow.Name;
+        _notes = Workflow.Notes ?? string.Empty;
+    }
+
+    private void Cancel() => MudDialog.Cancel();
+
+    private void Save()
+    {
+        if (NameIsInvalid) return;
+
+        var trimmedNotes = _notes.Trim();
+        var result = new WorkflowDefinition
+        {
+            Id = Workflow.Id,
+            RequestTypeVersionId = Workflow.RequestTypeVersionId,
+            Name = _name.Trim(),
+            Notes = string.IsNullOrEmpty(trimmedNotes) ? null : trimmedNotes,
+            StartNodeId = Workflow.StartNodeId,  // round-trip; this dialog doesn't touch it
+        };
+        MudDialog.Close(DialogResult.Ok(result));
+    }
+}

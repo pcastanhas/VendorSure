@@ -4,11 +4,11 @@
 
 ## Where we are
 
-**Phase 5 in progress.** Chunk 1 done (`WorkflowDefinition`
-repository — CRUD on `workflow_definitions` with Draft-gated
-mutations, transactional cascade-delete that handles the
-self-referential `workflow_nodes.path*` FKs). Next: Chunk 2
-(Workflows tab on the Request Type detail page).
+**Phase 5 in progress.** Chunks 1-2 done (`WorkflowDefinition`
+repository + Workflows tab on the Request Type detail page).
+Next: Chunk 3 (`WorkflowNode` repository — CRUD on
+`workflow_nodes` with renumber-on-insert/delete behavior on
+`execution_level`).
 
 Phase 5 design settled before code:
   - **D3.js** for the SVG canvas. No React, no build pipeline,
@@ -30,10 +30,10 @@ Phase 5 design settled before code:
 
 Read these to get oriented:
 - `docs/PLAN.md` — the phase/chunk roadmap. **Next step is Phase 5
-  / Chunk 2 — Workflows tab on the Request Type detail page.** PLAN's
-  provisional Phase 5 chunk list was superseded by the design
-  conversation (see Where We Are above); the locked-in plan lives
-  in the previous chat transcript and on the commit log.
+  / Chunk 3 — `WorkflowNode` repository.** PLAN's provisional
+  Phase 5 chunk list was superseded by the design conversation (see
+  Where We Are above); the locked-in plan lives in the previous chat
+  transcript and on the commit log.
 - `docs/data-model.sql` — the reviewed schema.
 - `docs/CONCEPT.md` — design intent. §3.3 covers Settings, User Groups,
   Users, Required Documents, and the Request Type editor in detail;
@@ -128,24 +128,30 @@ and `dotnet test`, reports back.
 
 ## Suggested next session
 
-**Phase 5 / Chunk 2 — Workflows tab.**
+**Phase 5 / Chunk 3 — `WorkflowNode` repository.**
 
-Replace the "ships in Phase 5" placeholder in
-`RequestTypeDetail.razor`'s Workflows tab panel with a real
-list-page component:
-  - Table of workflows for the displayed version (Name, Notes preview,
-    delete icon).
-  - "New workflow" button → small dialog (name + notes).
-  - Each row clickable → navigates to
-    `/admin/request-types/{typeId}/workflows/{workflowId}/designer`
-    (the destination 404s until Chunk 4, same nav-ahead-of-destination
-    pattern Phase 4 used).
-  - Read-only when displayed version isn't Draft. Same posture as the
-    other Phase 4 tabs.
-  - Delete confirm via `ShowMessageBoxAsync`. Maps all three
-    `DeleteWorkflowResult` outcomes to distinct snackbars.
+The graph-shaped one. CRUD on `workflow_nodes` plus the
+renumber-on-insert/delete behavior on `execution_level`. Three
+focused tests at minimum:
+  - Insert a Process node mid-graph → downstream nodes shift down.
+  - Delete a mid-graph node → downstream nodes shift up. Upstream
+    node's path1_node_id becomes NULL (orphan, per the dumb-canvas
+    posture — runtime decides if that's broken).
+  - Set start_node_id on the parent `workflow_definitions` row when
+    the first Start node is dropped.
 
-Wires entirely to `IWorkflowDefinitionRepository` from Chunk 1 — no
-new repo work this chunk.
+The CHECK constraints on `workflow_nodes` enforce most of the per-row
+shape (block_catalog_id presence by node type, path1/path2 counts by
+node type). Repository concerns above the schema:
+  - Renumber operation has to be atomic / transactional. Same UPDLOCK
+    pattern as Phase 4 / Chunk 9 (read with lock, walk downstream,
+    UPDATE).
+  - "Walk downstream" needs a way to find the chain: each node has
+    one or two outgoing path FKs, and `execution_level` says how deep
+    we are. Two implementation options: (a) walk the graph via the
+    FKs; (b) just `UPDATE … WHERE workflow_definition_id = @id AND
+    execution_level >= @insertedLevel`. Option (b) shifts ALL
+    downstream-or-equal nodes, which is fine since renumbering is
+    correct for the whole subgraph.
 
 PAT note: each session, user provides a short-lived PAT for the repo.

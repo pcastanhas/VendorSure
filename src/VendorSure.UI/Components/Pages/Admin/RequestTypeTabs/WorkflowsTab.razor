@@ -1,0 +1,334 @@
+@*
+    Workflows tab for the Request Type detail page.
+
+    Lists the workflow definitions for the displayed version. When IsDraft:
+    Add / Edit / Delete affordances are enabled. When not IsDraft:
+    read-only — table shows the workflows, Edit/Delete are disabled, the
+    "Open designer" icon still works (designer opens in read-only mode
+    when Chunk 4 ships it).
+
+    Wires entirely to IWorkflowDefinitionRepository from Chunk 1; no new
+    repository methods.
+
+    The "Open designer" icon navigates to
+    /admin/request-types/{TypeId}/workflows/{workflowId}/designer.
+    That route 404s until Chunk 4 — same nav-ahead-of-destination
+    pattern Phase 4 used for the detail page itself.
+*@
+
+@using VendorSure.Domain.Workflows
+@using VendorSure.Services.Workflows
+
+@inject IWorkflowDefinitionRepository WorkflowRepository
+@inject IDialogService DialogService
+@inject ISnackbar Snackbar
+@inject NavigationManager Navigation
+@inject ILogger<WorkflowsTab> Logger
+
+@if (_loading)
+{
+    <MudProgressLinear Indeterminate="true" Color="Color.Primary" Class="my-2" />
+}
+else
+{
+    <MudStack Row="true" AlignItems="AlignItems.Center" Class="mb-3">
+        <MudText Typo="Typo.body2" Class="mud-text-secondary">
+            @if (IsDraft)
+            {
+                <span>
+                    Candidate workflows for this version. The AI triage layer
+                    picks among them at submission time using the Selection
+                    Prompt.
+                </span>
+            }
+            else
+            {
+                <span>Read-only — this version's workflows are frozen.</span>
+            }
+        </MudText>
+        <MudSpacer />
+        @if (IsDraft)
+        {
+            <MudButton Variant="Variant.Filled"
+                       Color="Color.Primary"
+                       StartIcon="@Icons.Material.Filled.Add"
+                       OnClick="OpenCreateDialog">
+                New workflow
+            </MudButton>
+        }
+    </MudStack>
+
+    @if (_workflows.Count == 0)
+    {
+        <MudAlert Severity="Severity.Info" Variant="Variant.Text">
+            No workflows yet@(IsDraft ? ". Click \"New workflow\" to create one." : ".")
+        </MudAlert>
+    }
+    else
+    {
+        <MudTable Items="@_workflows" Dense="true" Hover="true" Elevation="0">
+            <HeaderContent>
+                <MudTh>Name</MudTh>
+                <MudTh>Notes</MudTh>
+                <MudTh Style="width: 160px;"></MudTh>
+            </HeaderContent>
+            <RowTemplate>
+                <MudTd DataLabel="Name">@context.Name</MudTd>
+                <MudTd DataLabel="Notes">
+                    @if (!string.IsNullOrEmpty(context.Notes))
+                    {
+                        <span class="mud-text-secondary"
+                              style="display: inline-block; max-width: 480px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">
+                            @context.Notes
+                        </span>
+                    }
+                    else
+                    {
+                        <span class="mud-text-disabled">—</span>
+                    }
+                </MudTd>
+                <MudTd>
+                    <MudStack Row="true" Spacing="1">
+                        <MudIconButton Icon="@Icons.Material.Filled.OpenInNew"
+                                       Size="Size.Small"
+                                       Title="Open in designer"
+                                       OnClick="@(() => OpenDesigner(context))" />
+                        <MudIconButton Icon="@Icons.Material.Filled.Edit"
+                                       Size="Size.Small"
+                                       Disabled="@(!IsDraft)"
+                                       Title="@(IsDraft ? "Edit" : "Edit (read-only — version is not Draft)")"
+                                       OnClick="@(() => OpenEditDialog(context))" />
+                        <MudIconButton Icon="@Icons.Material.Filled.Delete"
+                                       Size="Size.Small"
+                                       Color="Color.Error"
+                                       Disabled="@(!IsDraft)"
+                                       Title="@(IsDraft ? "Delete" : "Delete (read-only — version is not Draft)")"
+                                       OnClick="@(() => DeleteAsync(context))" />
+                    </MudStack>
+                </MudTd>
+            </RowTemplate>
+        </MudTable>
+    }
+}
+
+@code {
+    /// <summary>The Request Type version this tab is showing workflows for.</summary>
+    [Parameter, EditorRequired] public int VersionId { get; set; }
+
+    /// <summary>True when the version is editable. Drives the Add / Edit / Delete affordances.</summary>
+    [Parameter, EditorRequired] public bool IsDraft { get; set; }
+
+    /// <summary>
+    /// The parent Request Type's id. Needed for the designer URL — the
+    /// destination route includes both the type id and the workflow id so
+    /// the designer page can render breadcrumbs back to the right type.
+    /// </summary>
+    [Parameter, EditorRequired] public int TypeId { get; set; }
+
+    private IReadOnlyList<WorkflowDefinition> _workflows = Array.Empty<WorkflowDefinition>();
+    private bool _loading = true;
+    private int _loadedForVersionId = -1;
+
+    protected override async Task OnParametersSetAsync()
+    {
+        if (VersionId == _loadedForVersionId) return;
+        _loadedForVersionId = VersionId;
+        await LoadAsync();
+    }
+
+    private async Task LoadAsync()
+    {
+        _loading = true;
+        try
+        {
+            _workflows = await WorkflowRepository.ListByVersionIdAsync(VersionId);
+        }
+        catch (Exception ex)
+        {
+            Logger.LogError(ex, "Failed to load workflows for version id={VersionId}.", VersionId);
+            Snackbar.Add("Failed to load workflows. Check the log.", Severity.Error);
+            _workflows = Array.Empty<WorkflowDefinition>();
+        }
+        finally
+        {
+            _loading = false;
+        }
+    }
+
+    private async Task OpenCreateDialog()
+    {
+        if (!IsDraft) return;
+
+        var seed = new WorkflowDefinition
+        {
+            Id = 0,
+            RequestTypeVersionId = VersionId,
+            Name = string.Empty,
+            Notes = null,
+            StartNodeId = null,
+        };
+
+        var options = new DialogOptions
+        {
+            CloseOnEscapeKey = true,
+            MaxWidth = MaxWidth.Small,
+            FullWidth = true,
+        };
+        var parameters = new DialogParameters<EditWorkflowDialog>
+        {
+            { x => x.Workflow, seed },
+        };
+
+        var dialog = await DialogService.ShowAsync<EditWorkflowDialog>(
+            "New workflow", parameters, options);
+        var result = await dialog.Result;
+        if (result is null || result.Canceled) return;
+        if (result.Data is not WorkflowDefinition edited) return;
+
+        await CreateAsync(edited);
+    }
+
+    private async Task CreateAsync(WorkflowDefinition edited)
+    {
+        try
+        {
+            var result = await WorkflowRepository.CreateAsync(
+                VersionId, edited.Name, edited.Notes);
+            switch (result.Outcome)
+            {
+                case CreateWorkflowOutcome.Created:
+                    Logger.LogInformation(
+                        "Workflow created (id={Id}, name='{Name}') on version id={VersionId}.",
+                        result.Id, edited.Name, VersionId);
+                    Snackbar.Add($"Created '{edited.Name}'.", Severity.Success);
+                    await LoadAsync();
+                    break;
+                case CreateWorkflowOutcome.RejectedVersionNotFound:
+                    Snackbar.Add("Cannot create: version no longer exists.", Severity.Error);
+                    break;
+                case CreateWorkflowOutcome.RejectedNotDraft:
+                    Snackbar.Add("Cannot create: version is no longer Draft.", Severity.Error);
+                    break;
+                case CreateWorkflowOutcome.RejectedNameConflict:
+                    Snackbar.Add(
+                        $"Cannot create: another workflow on this version already has the name '{edited.Name}'.",
+                        Severity.Error);
+                    break;
+            }
+        }
+        catch (Exception ex)
+        {
+            Logger.LogError(ex, "Failed to create workflow on version id={VersionId}.", VersionId);
+            Snackbar.Add($"Failed to create: {ex.Message}", Severity.Error);
+        }
+    }
+
+    private async Task OpenEditDialog(WorkflowDefinition workflow)
+    {
+        if (!IsDraft) return;
+
+        var options = new DialogOptions
+        {
+            CloseOnEscapeKey = true,
+            MaxWidth = MaxWidth.Small,
+            FullWidth = true,
+        };
+        var parameters = new DialogParameters<EditWorkflowDialog>
+        {
+            { x => x.Workflow, workflow },
+        };
+
+        var dialog = await DialogService.ShowAsync<EditWorkflowDialog>(
+            "Edit workflow", parameters, options);
+        var result = await dialog.Result;
+        if (result is null || result.Canceled) return;
+        if (result.Data is not WorkflowDefinition edited) return;
+
+        await UpdateAsync(edited);
+    }
+
+    private async Task UpdateAsync(WorkflowDefinition edited)
+    {
+        try
+        {
+            var result = await WorkflowRepository.UpdateAsync(
+                edited.Id, edited.Name, edited.Notes);
+            switch (result)
+            {
+                case UpdateWorkflowResult.Updated:
+                    Logger.LogInformation("Workflow id={Id} updated.", edited.Id);
+                    Snackbar.Add("Saved.", Severity.Success);
+                    await LoadAsync();
+                    break;
+                case UpdateWorkflowResult.NotFound:
+                    Snackbar.Add("Cannot save: workflow no longer exists.", Severity.Warning);
+                    await LoadAsync();
+                    break;
+                case UpdateWorkflowResult.RejectedNotDraft:
+                    Snackbar.Add("Cannot save: version is no longer Draft.", Severity.Error);
+                    await LoadAsync();
+                    break;
+                case UpdateWorkflowResult.RejectedNameConflict:
+                    Snackbar.Add(
+                        $"Cannot save: another workflow on this version already has the name '{edited.Name}'.",
+                        Severity.Error);
+                    break;
+            }
+        }
+        catch (Exception ex)
+        {
+            Logger.LogError(ex, "Failed to update workflow id={Id}.", edited.Id);
+            Snackbar.Add($"Failed to save: {ex.Message}", Severity.Error);
+        }
+    }
+
+    private async Task DeleteAsync(WorkflowDefinition workflow)
+    {
+        if (!IsDraft) return;
+
+        var confirmed = await DialogService.ShowMessageBoxAsync(
+            title: $"Delete workflow '{workflow.Name}'?",
+            markupMessage: new MarkupString(
+                "This deletes the workflow and all of its nodes. " +
+                "This cannot be undone."),
+            yesText: "Delete",
+            cancelText: "Cancel",
+            options: new DialogOptions { CloseOnEscapeKey = true });
+
+        if (confirmed != true) return;
+
+        try
+        {
+            var result = await WorkflowRepository.DeleteAsync(workflow.Id);
+            switch (result)
+            {
+                case DeleteWorkflowResult.Deleted:
+                    Logger.LogInformation(
+                        "Workflow id={Id} ('{Name}') deleted.", workflow.Id, workflow.Name);
+                    Snackbar.Add($"Deleted '{workflow.Name}'.", Severity.Success);
+                    await LoadAsync();
+                    break;
+                case DeleteWorkflowResult.NotFound:
+                    Snackbar.Add("Already deleted.", Severity.Info);
+                    await LoadAsync();
+                    break;
+                case DeleteWorkflowResult.RejectedNotDraft:
+                    Snackbar.Add("Cannot delete: version is no longer Draft.", Severity.Error);
+                    break;
+            }
+        }
+        catch (Exception ex)
+        {
+            Logger.LogError(ex, "Failed to delete workflow id={Id}.", workflow.Id);
+            Snackbar.Add($"Failed to delete: {ex.Message}", Severity.Error);
+        }
+    }
+
+    private void OpenDesigner(WorkflowDefinition workflow)
+    {
+        // Designer route doesn't exist until Chunk 4 — the URL is wired now
+        // so Chunk 4 only has to add the page.
+        Navigation.NavigateTo(
+            $"/admin/request-types/{TypeId}/workflows/{workflow.Id}/designer");
+    }
+}

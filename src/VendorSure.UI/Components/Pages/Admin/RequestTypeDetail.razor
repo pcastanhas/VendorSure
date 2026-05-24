@@ -165,9 +165,18 @@ else
     <MudPaper Elevation="1">
         <MudTabs Outlined="true" Position="Position.Top" Rounded="true" TabPanelsClass="pa-4">
             <MudTabPanel Text="Workflows" Icon="@Icons.Material.Filled.AccountTree">
-                <MudAlert Severity="Severity.Info" Variant="Variant.Text">
-                    Workflow designer ships in Phase 5.
-                </MudAlert>
+                @if (_selectedVersion is not null && _type is not null)
+                {
+                    <WorkflowsTab VersionId="@_selectedVersion.Id"
+                                  IsDraft="@(_selectedVersion.RequestState == RequestState.Draft)"
+                                  TypeId="@_type.Id" />
+                }
+                else
+                {
+                    <MudAlert Severity="Severity.Info" Variant="Variant.Text">
+                        Select a version to view its workflows.
+                    </MudAlert>
+                }
             </MudTabPanel>
             <MudTabPanel Text="Required Documents" Icon="@Icons.Material.Filled.Description">
                 @if (_selectedVersion is not null)
