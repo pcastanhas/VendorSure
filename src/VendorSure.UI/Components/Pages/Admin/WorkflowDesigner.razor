@@ -91,12 +91,22 @@ else if (_loadError is not null)
 }
 else
 {
-    @* Breadcrumb back to the type detail page. The Workflows tab on
-       that page is where the admin came from. *@
-    <MudBreadcrumbs Items="_breadcrumbs" Class="mb-2" />
-
-    <MudStack Row="true" AlignItems="AlignItems.Center" Class="mb-3">
+    @* Header row: {Request Type} / {Workflow Name} / {Status pill}.
+       Combines what used to be a separate breadcrumb row and a
+       title-with-pill row. The Request Type is a link back to its
+       detail page (where the Workflows tab is); the workflow name
+       is plain text (we're already on its page); the status pill
+       reflects the parent version's request_state. *@
+    <MudStack Row="true" AlignItems="AlignItems.Center" Spacing="2" Class="mb-3">
+        <MudLink Href="@($"/admin/request-types/{_type!.Id}")"
+                 Underline="Underline.Hover"
+                 Typo="Typo.h5"
+                 Color="Color.Default">
+            @_type.Name
+        </MudLink>
+        <MudText Typo="Typo.h5" Class="mud-text-secondary">/</MudText>
         <MudText Typo="Typo.h5">@_workflow!.Name</MudText>
+        <MudText Typo="Typo.h5" Class="mud-text-secondary">/</MudText>
         <MudChip T="string"
                  Size="Size.Small"
                  Color="@StateColor(_version!.RequestState)"
@@ -357,7 +367,6 @@ else
     private WorkflowDefinition? _workflow;
     private IReadOnlyList<WorkflowNode> _nodes = Array.Empty<WorkflowNode>();
     private IReadOnlyList<BlockCatalog> _blocks = Array.Empty<BlockCatalog>();
-    private List<BreadcrumbItem> _breadcrumbs = new();
 
     private bool _loading = true;
     private string? _loadError;
@@ -470,13 +479,6 @@ else
             // there's no fetch delay when the user clicks +. The catalog
             // is small (a handful of rows even at production scale).
             _blocks = await BlockRepository.ListActiveAsync();
-
-            _breadcrumbs = new()
-            {
-                new BreadcrumbItem("Request Types", href: "/admin/request-types"),
-                new BreadcrumbItem(_type.Name, href: $"/admin/request-types/{_type.Id}"),
-                new BreadcrumbItem(_workflow.Name, href: null, disabled: true),
-            };
         }
         catch (Exception ex)
         {
