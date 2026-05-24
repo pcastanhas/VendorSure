@@ -4,13 +4,15 @@
 
 ## Where we are
 
-**Phase 5 in progress.** Chunks 1-3 done (`WorkflowDefinition`
-repository + Workflows tab + `WorkflowNode` repository — CRUD on
-`workflow_nodes` plus the graph-shaped operations: SetPath1Async /
-SetPath2Async with recursive-CTE subtree renumber; DeleteAsync that
-nulls upstream path FKs without renumbering downstream; SetStartNode
-that renumbers from level 1). Next: Chunk 4 (designer page shell at
-`/admin/request-types/{typeId}/workflows/{workflowId}/designer`).
+**Phase 5 in progress.** Chunks 1-4 done (`WorkflowDefinition`
+repository + Workflows tab + `WorkflowNode` repository + designer
+page shell). The designer route the Workflows tab navigates to
+(`/admin/request-types/{typeId}/workflows/{workflowId}/designer`)
+now resolves: loads workflow + version + type + nodes via the
+repos, renders a breadcrumb + state-aware header + an empty
+`<div id="workflow-canvas">` placeholder + a temporary
+node-list readout table for development feedback. Next: Chunk 5
+(D3 interop spike — first JS interop in the codebase).
 
 Phase 5 design settled before code:
   - **D3.js** for the SVG canvas. No React, no build pipeline,
@@ -32,7 +34,7 @@ Phase 5 design settled before code:
 
 Read these to get oriented:
 - `docs/PLAN.md` — the phase/chunk roadmap. **Next step is Phase 5
-  / Chunk 4 — designer page shell.** PLAN's provisional Phase 5
+  / Chunk 5 — D3 interop spike.** PLAN's provisional Phase 5
   chunk list was superseded by the design conversation (see Where
   We Are above); the locked-in plan lives in the previous chat
   transcript and on the commit log.
@@ -130,29 +132,42 @@ and `dotnet test`, reports back.
 
 ## Suggested next session
 
-**Phase 5 / Chunk 4 — Designer page shell.**
+**Phase 5 / Chunk 5 — D3 interop spike.**
 
-New Razor page at
-`/admin/request-types/{typeId}/workflows/{workflowId}/designer`
-that the Workflows tab's open-icon already links to. The page
-loads the workflow + its nodes via Chunk 1 and Chunk 3 repos.
-Scope of THIS chunk is intentionally shell-only — no D3 yet
-(that's Chunk 5).
+The riskiest chunk in Phase 5. First JS interop in the codebase
+and first non-trivial JS file. Goal: D3 renders a graph inside the
+`<div id="workflow-canvas">` placeholder Chunk 4 already provides.
 
-What ships:
-  - Route + page component with workflow name in the top bar.
-  - Breadcrumb back to `/admin/request-types/{typeId}` so the
-    admin can return to the detail page.
-  - A `<div id="workflow-canvas">` placeholder where D3 will
-    eventually render. Empty for now.
-  - A read-only banner when the parent version isn't Draft
-    (mirroring the same posture as the Phase 4 tabs).
-  - A test affordance that lists the workflow's nodes (Chunk 3
-    has 29 tests on the repo but no UI yet) — table of node
-    type / level / path1 / path2. Helps confirm visually that
-    the repo is doing the right thing while we build out the
-    canvas.
+Scope:
+  - One `workflow-designer.js` file under
+    `src/VendorSure.UI/wwwroot/js/`. References D3 from a CDN
+    (probably `https://cdn.jsdelivr.net/npm/d3@7/dist/d3.min.js`,
+    pinned version).
+  - A small `IJSObjectReference`-based module that the designer page
+    instantiates on first render. The module owns the canvas div
+    completely (Blazor never re-renders inside it — see
+    LessonsLearned about Blazor + D3).
+  - Blazor pushes the graph in via a JS function call:
+    `module.invokeMethodAsync('mount', { nodes, edges })`.
+    Eventually JS will call back into Blazor; not in this chunk.
+  - Render: each node as a shape per type (oval / rectangle /
+    diamond / terminal-oval) with the seeded color; edges drawn
+    as curves via `d3.linkVertical()` from path1/path2 FKs.
+  - Layout: fixed, computed from `execution_level` (vertical row)
+    + parent-driven horizontal slot (path1 = left, path2 = right
+    for Decisions; insertion order otherwise). The layout function
+    lives in JS and is dumb — no force simulation, no animation.
+  - Read-only in this chunk. No drag, no zoom, no click handlers.
+    Just rendering.
 
-Wires entirely to existing repos. No new repo work this chunk.
+Likely catches:
+  - Blazor Server's render-diff fighting with D3's DOM mutations.
+    Fix: the canvas div has `@key` or a static element ref and
+    Blazor never re-renders inside it after the initial mount.
+  - First-render timing — Blazor's `OnAfterRenderAsync(firstRender)`
+    is the right hook to mount D3 from.
+  - D3 v7 vs v6 API differences (selection.enter() / data() pattern).
+
+Wires to Chunk 4's loaded `_nodes` collection. No new repo work.
 
 PAT note: each session, user provides a short-lived PAT for the repo.

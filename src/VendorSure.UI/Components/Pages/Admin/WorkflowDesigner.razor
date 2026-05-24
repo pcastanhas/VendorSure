@@ -1,0 +1,302 @@
+@*
+    Workflow Designer — shell page.
+
+    URL: /admin/request-types/{TypeId}/workflows/{WorkflowId}/designer
+
+    Phase 5 / Chunk 4: scope is intentionally shell-only.
+      - Loads the type + workflow + nodes via the repos.
+      - Renders breadcrumb back to the type detail page.
+      - Shows a read-only banner when the parent version isn't Draft.
+      - Provides an empty <div id="workflow-canvas"> placeholder where
+        Chunk 5's D3 spike will mount.
+      - Provides a temporary test affordance: a table listing the
+        workflow's nodes (id / type / level / paths). Slated for removal
+        at end of Phase 5 once the canvas itself renders the graph.
+
+    No D3, no JS interop, no editing UI yet — that's Chunks 5-10.
+*@
+
+@page "/admin/request-types/{TypeId:int}/workflows/{WorkflowId:int}/designer"
+@attribute [Authorize]
+
+@using Microsoft.AspNetCore.Authorization
+@using VendorSure.Domain.RequestTypes
+@using VendorSure.Domain.Workflows
+@using VendorSure.Services.RequestTypes
+@using VendorSure.Services.Workflows
+
+@inject IRequestTypeRepository TypeRepository
+@inject IRequestTypeVersionRepository VersionRepository
+@inject IWorkflowDefinitionRepository WorkflowRepository
+@inject IWorkflowNodeRepository NodeRepository
+@inject NavigationManager Navigation
+@inject ISnackbar Snackbar
+@inject ILogger<WorkflowDesigner> Logger
+
+<PageTitle>@PageTitleText — VendorSure</PageTitle>
+
+@if (_loading)
+{
+    <MudProgressLinear Indeterminate="true" Color="Color.Primary" Class="my-2" />
+}
+else if (_loadError is not null)
+{
+    <MudAlert Severity="Severity.Warning" Class="mb-4">
+        @_loadError
+        <MudLink Href="/admin/request-types">Back to request types</MudLink>.
+    </MudAlert>
+}
+else
+{
+    @* Breadcrumb back to the type detail page. The Workflows tab on
+       that page is where the admin came from. *@
+    <MudBreadcrumbs Items="_breadcrumbs" Class="mb-2" />
+
+    <MudStack Row="true" AlignItems="AlignItems.Center" Class="mb-3">
+        <MudText Typo="Typo.h5">@_workflow!.Name</MudText>
+        <MudChip T="string"
+                 Size="Size.Small"
+                 Color="@StateColor(_version!.RequestState)"
+                 Variant="Variant.Filled">
+            @StateLabel(_version.RequestState)
+        </MudChip>
+        <MudSpacer />
+    </MudStack>
+
+    @if (!IsDraft)
+    {
+        <MudAlert Severity="Severity.Info" Variant="Variant.Text" Dense="true" Class="mb-3">
+            This version is <strong>@StateLabel(_version.RequestState)</strong> and the workflow is read-only.
+            Edits require creating a new Draft version of the parent request type.
+        </MudAlert>
+    }
+
+    <MudPaper Class="pa-3 mb-4" Elevation="1">
+        @* D3 lands here in Chunk 5. The div has a fixed minimum height
+           so the surrounding layout doesn't collapse when the canvas is
+           empty. Phase 5 / Chunk 5 will wire JS interop to draw inside this. *@
+        <MudText Typo="Typo.subtitle2" Class="mb-2 mud-text-secondary">
+            Canvas (D3 lands in Chunk 5)
+        </MudText>
+        <div id="workflow-canvas"
+             style="width: 100%; min-height: 360px; border: 1px dashed var(--mud-palette-divider); border-radius: 4px;">
+        </div>
+    </MudPaper>
+
+    @* --- TEMPORARY: node-list test affordance ----------------------------
+       Provides a textual readout of the workflow's nodes so we can
+       eyeball repository behavior (renumber correctness, path FKs,
+       start_node_id) while the canvas is being built out in Chunks
+       5-10. Tagged for removal at end of Phase 5 when the canvas
+       fully replaces this. ---------------------------------------------- *@
+    <MudPaper Class="pa-3" Outlined="true">
+        <MudStack Row="true" AlignItems="AlignItems.Center" Class="mb-2">
+            <MudText Typo="Typo.subtitle2" Class="mud-text-secondary">
+                Nodes (temporary readout — removed at end of Phase 5)
+            </MudText>
+            <MudSpacer />
+            <MudText Typo="Typo.caption" Class="mud-text-secondary">
+                start_node_id =
+                @if (_workflow.StartNodeId is int startId)
+                {
+                    <code>@startId</code>
+                }
+                else
+                {
+                    <em>null</em>
+                }
+            </MudText>
+        </MudStack>
+
+        @if (_nodes.Count == 0)
+        {
+            <MudText Typo="Typo.body2" Class="mud-text-disabled">
+                This workflow has no nodes yet.
+            </MudText>
+        }
+        else
+        {
+            <MudSimpleTable Dense="true" Hover="true" Elevation="0">
+                <thead>
+                    <tr>
+                        <th>id</th>
+                        <th>node type</th>
+                        <th>block id</th>
+                        <th>level</th>
+                        <th>path1</th>
+                        <th>path2</th>
+                        <th>prompt</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    @foreach (var n in _nodes)
+                    {
+                        <tr>
+                            <td><code>@n.Id</code></td>
+                            <td>@NodeTypeLabel(n.NodeTypeId)</td>
+                            <td>
+                                @if (n.BlockCatalogId is int b)
+                                {
+                                    <code>@b</code>
+                                }
+                                else
+                                {
+                                    <span class="mud-text-disabled">—</span>
+                                }
+                            </td>
+                            <td><code>@n.ExecutionLevel</code></td>
+                            <td>
+                                @if (n.Path1NodeId is int p1)
+                                {
+                                    <code>→ @p1</code>
+                                }
+                                else
+                                {
+                                    <span class="mud-text-disabled">—</span>
+                                }
+                            </td>
+                            <td>
+                                @if (n.Path2NodeId is int p2)
+                                {
+                                    <code>→ @p2</code>
+                                }
+                                else
+                                {
+                                    <span class="mud-text-disabled">—</span>
+                                }
+                            </td>
+                            <td>
+                                @if (!string.IsNullOrEmpty(n.PromptText))
+                                {
+                                    <span class="mud-text-secondary">@n.PromptText</span>
+                                }
+                                else
+                                {
+                                    <span class="mud-text-disabled">—</span>
+                                }
+                            </td>
+                        </tr>
+                    }
+                </tbody>
+            </MudSimpleTable>
+        }
+    </MudPaper>
+}
+
+@code {
+    [Parameter] public int TypeId { get; set; }
+    [Parameter] public int WorkflowId { get; set; }
+
+    private RequestType? _type;
+    private RequestTypeVersion? _version;
+    private WorkflowDefinition? _workflow;
+    private IReadOnlyList<WorkflowNode> _nodes = Array.Empty<WorkflowNode>();
+    private List<BreadcrumbItem> _breadcrumbs = new();
+
+    private bool _loading = true;
+    private string? _loadError;
+
+    private bool IsDraft => _version?.RequestState == RequestState.Draft;
+    private string PageTitleText => _workflow is null ? "Workflow Designer" : _workflow.Name;
+
+    protected override async Task OnParametersSetAsync()
+    {
+        await LoadAsync();
+    }
+
+    private async Task LoadAsync()
+    {
+        _loading = true;
+        _loadError = null;
+        try
+        {
+            // Resolve in dependency order: workflow → version (via workflow's
+            // version id) → type (via version's type id). If anything is
+            // missing or mismatched against the URL, surface a single
+            // "not found" with the same affordance regardless of which
+            // entity is missing. The fine-grained reason isn't useful to
+            // the user — they shared a bad URL or the entity got deleted.
+            _workflow = await WorkflowRepository.GetByIdAsync(WorkflowId);
+            if (_workflow is null)
+            {
+                _loadError = $"Workflow id={WorkflowId} not found.";
+                return;
+            }
+
+            _version = await VersionRepository.GetByIdAsync(_workflow.RequestTypeVersionId);
+            if (_version is null)
+            {
+                _loadError = $"Workflow id={WorkflowId} references a missing version.";
+                return;
+            }
+
+            _type = await TypeRepository.GetByIdAsync(_version.RequestTypeId);
+            if (_type is null)
+            {
+                _loadError = $"Workflow id={WorkflowId} references a missing request type.";
+                return;
+            }
+
+            // URL-vs-data sanity check: did the caller's TypeId actually
+            // match the workflow's type? If not, the URL is malformed
+            // (someone hand-edited it or shared a stale link). Treat as
+            // not found rather than silently redirecting — the breadcrumbs
+            // would be misleading otherwise.
+            if (_type.Id != TypeId)
+            {
+                _loadError =
+                    $"Workflow id={WorkflowId} belongs to request type id={_type.Id}, " +
+                    $"but the URL says id={TypeId}.";
+                return;
+            }
+
+            _nodes = await NodeRepository.ListByWorkflowIdAsync(WorkflowId);
+
+            _breadcrumbs = new()
+            {
+                new BreadcrumbItem("Request Types", href: "/admin/request-types"),
+                new BreadcrumbItem(_type.Name, href: $"/admin/request-types/{_type.Id}"),
+                new BreadcrumbItem(_workflow.Name, href: null, disabled: true),
+            };
+        }
+        catch (Exception ex)
+        {
+            Logger.LogError(ex,
+                "Failed to load workflow designer for type={TypeId} workflow={WorkflowId}.",
+                TypeId, WorkflowId);
+            _loadError = $"Failed to load: {ex.Message}";
+            Snackbar.Add("Failed to load workflow designer.", Severity.Error);
+        }
+        finally
+        {
+            _loading = false;
+        }
+    }
+
+    private static string NodeTypeLabel(int nodeTypeId) => nodeTypeId switch
+    {
+        WorkflowNodeTypeIds.Start => "Start",
+        WorkflowNodeTypeIds.Process => "Process",
+        WorkflowNodeTypeIds.Decision => "Decision",
+        WorkflowNodeTypeIds.Approved => "Approved",
+        WorkflowNodeTypeIds.Rejected => "Rejected",
+        WorkflowNodeTypeIds.Cancelled => "Cancelled",
+        _ => $"unknown ({nodeTypeId})",
+    };
+
+    private static string StateLabel(RequestState state) => state switch
+    {
+        RequestState.Draft => "Draft",
+        RequestState.InService => "In Service",
+        RequestState.Superseded => "Superseded",
+        _ => state.ToString(),
+    };
+
+    private static Color StateColor(RequestState state) => state switch
+    {
+        RequestState.Draft => Color.Primary,
+        RequestState.InService => Color.Success,
+        RequestState.Superseded => Color.Default,
+        _ => Color.Default,
+    };
+}
