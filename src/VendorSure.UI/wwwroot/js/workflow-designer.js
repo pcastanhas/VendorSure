@@ -76,6 +76,90 @@ const NODE_LABEL = {
     [NODE_TYPE.Cancelled]: "Cancelled",
 };
 
+// Actor type ints matching VendorSure.Domain.Workflows.BlockCatalogActorType.
+// The block catalog row carries one of these; the workflow engine in
+// Phase 6+ will dispatch differently for each. The designer just shows
+// a small icon prefix so the reader can scan a workflow and tell at a
+// glance which blocks are automated, which need human input, and which
+// involve AI.
+const ACTOR_TYPE = { System: 1, Human: 2, AI: 3 };
+
+const ICON_SIZE = 12;  // px square; matches the 12px label font for visual harmony
+const ICON_GAP = 4;    // gap between the icon's right edge and the text's left edge
+
+// Each renderer takes a D3 selection (the icon's container <g>) and a
+// stroke color. The container is already positioned and scaled; the
+// renderer just draws shapes inside a 16x16 logical space using stroke
+// only (no fill) so the icon inherits the node's text color cleanly.
+function renderSystemIcon(sel, color) {
+    // Gear: an outer cog ring (8 short bumps approximated as a simple
+    // circle with notches drawn by short radial ticks), plus a small
+    // inner circle for the hub. At ICON_SIZE=12 the cog teeth are too
+    // small to read individually, so we go with a stylized gear: outer
+    // circle + 6 short radial ticks for "teeth" + a smaller inner hub
+    // circle. Reads as "settings/system" universally.
+    const center = 8;
+    const outerR = 5.5;
+    const tickOuter = 7;
+    const tickInner = 5.5;
+    const hubR = 2;
+    sel.append("circle")
+        .attr("cx", center).attr("cy", center).attr("r", outerR)
+        .attr("fill", "none").attr("stroke", color).attr("stroke-width", 1);
+    for (let i = 0; i < 6; i++) {
+        const angle = (i * Math.PI) / 3;  // 60° spacing
+        const x1 = center + tickInner * Math.cos(angle);
+        const y1 = center + tickInner * Math.sin(angle);
+        const x2 = center + tickOuter * Math.cos(angle);
+        const y2 = center + tickOuter * Math.sin(angle);
+        sel.append("line")
+            .attr("x1", x1).attr("y1", y1).attr("x2", x2).attr("y2", y2)
+            .attr("stroke", color).attr("stroke-width", 1.2)
+            .attr("stroke-linecap", "round");
+    }
+    sel.append("circle")
+        .attr("cx", center).attr("cy", center).attr("r", hubR)
+        .attr("fill", "none").attr("stroke", color).attr("stroke-width", 1);
+}
+
+function renderHumanIcon(sel, color) {
+    // Person silhouette: head circle + shoulder arc. At small sizes
+    // the simpler the better — just a head and a rounded torso curve.
+    sel.append("circle")
+        .attr("cx", 8).attr("cy", 4.5).attr("r", 2.3)
+        .attr("fill", "none").attr("stroke", color).attr("stroke-width", 1.2);
+    sel.append("path")
+        .attr("d", "M 2.5 14.5 C 2.5 10.5 5 8.5 8 8.5 C 11 8.5 13.5 10.5 13.5 14.5")
+        .attr("fill", "none").attr("stroke", color).attr("stroke-width", 1.2)
+        .attr("stroke-linecap", "round");
+}
+
+function renderAIIcon(sel, color) {
+    // Robot head: rounded square head, two eye dots, short antenna.
+    sel.append("line")
+        .attr("x1", 8).attr("y1", 2).attr("x2", 8).attr("y2", 3.5)
+        .attr("stroke", color).attr("stroke-width", 1).attr("stroke-linecap", "round");
+    sel.append("circle")
+        .attr("cx", 8).attr("cy", 1.6).attr("r", 0.7)
+        .attr("fill", color).attr("stroke", "none");
+    sel.append("rect")
+        .attr("x", 3).attr("y", 4).attr("width", 10).attr("height", 9)
+        .attr("rx", 1.5).attr("ry", 1.5)
+        .attr("fill", "none").attr("stroke", color).attr("stroke-width", 1.2);
+    sel.append("circle")
+        .attr("cx", 6).attr("cy", 8.5).attr("r", 0.9)
+        .attr("fill", color).attr("stroke", "none");
+    sel.append("circle")
+        .attr("cx", 10).attr("cy", 8.5).attr("r", 0.9)
+        .attr("fill", color).attr("stroke", "none");
+}
+
+const ACTOR_ICON_RENDERER = {
+    [ACTOR_TYPE.System]: renderSystemIcon,
+    [ACTOR_TYPE.Human]:  renderHumanIcon,
+    [ACTOR_TYPE.AI]:     renderAIIcon,
+};
+
 export async function mount(selector, graphData, dotNetRef) {
     if (typeof window === "undefined" || !window.d3) {
         console.error("workflow-designer: window.d3 is not loaded. " +
@@ -298,13 +382,51 @@ export async function mount(selector, graphData, dotNetRef) {
             sel.append("title").text(d.blockDescription);
         }
 
-        sel.append("text")
+        // Label and (when the node has a block with a known actor type)
+        // a small icon prefix. The icon sits to the LEFT of the centered
+        // label, then both are shifted left as a unit so the combination
+        // is centered. Approach: render text first to measure its actual
+        // width via getBBox(), then offset both the text and the icon by
+        // (icon + gap) / 2 to re-center the whole prefix+label unit.
+        const labelText = sel.append("text")
             .attr("text-anchor", "middle")
             .attr("dominant-baseline", "middle")
             .attr("font-size", "12px")
             .attr("font-weight", "500")
             .attr("fill", style.text)
             .text(nodeLabel(d));
+
+        const renderer = d.actorType != null
+            ? ACTOR_ICON_RENDERER[d.actorType]
+            : null;
+        if (renderer) {
+            // Measure the rendered text. getBBox returns the tight
+            // bounding box; .width is what we shift around.
+            const textWidth = labelText.node().getBBox().width;
+            const totalWidth = ICON_SIZE + ICON_GAP + textWidth;
+
+            // Re-center: the icon's LEFT edge sits at -totalWidth/2,
+            // the text's center sits at -totalWidth/2 + ICON_SIZE +
+            // ICON_GAP + textWidth/2 = -textWidth/2 + (ICON_SIZE +
+            // ICON_GAP)/2. So shift the text right by half the
+            // (ICON_SIZE + ICON_GAP) width.
+            const textShift = (ICON_SIZE + ICON_GAP) / 2;
+            labelText.attr("x", textShift);
+
+            // Icon container: position it left of where the text now
+            // sits. The icon's renderer draws inside a 16x16 logical
+            // space; we transform by translate(left, top) and scale
+            // (ICON_SIZE / 16) to fit.
+            const iconLeft = -totalWidth / 2;
+            const iconTop = -ICON_SIZE / 2;
+            const scale = ICON_SIZE / 16;
+            const iconG = sel.append("g")
+                .attr("class", "actor-icon")
+                .attr("transform",
+                    `translate(${iconLeft}, ${iconTop}) scale(${scale})`)
+                .style("pointer-events", "none");
+            renderer(iconG, style.text);
+        }
     });
 
     // + buttons, drawn last so they paint on top of nodes and edges.

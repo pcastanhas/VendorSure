@@ -584,6 +584,7 @@ else
                 blockName = block?.Name,
                 blockDescription = block?.Description,
                 blockColor = block?.Color,
+                actorType = block is null ? (int?)null : (int)block.ActorType,
                 path1Decision = block?.Path1Decision,
                 path2Decision = block?.Path2Decision,
                 executionLevel = n.ExecutionLevel,
