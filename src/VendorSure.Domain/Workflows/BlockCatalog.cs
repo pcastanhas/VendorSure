@@ -29,8 +29,18 @@ public sealed class BlockCatalog
     public int NodeTypeId { get; init; }
 
     /// <summary>
-    /// Short human-readable label shown on the palette and the canvas
-    /// (eventually — Chunk 5 still shows the generic node-type label).
+    /// Short label (a couple of words) shown in the picker dialog's
+    /// primary line and rendered as the label on each node body on the
+    /// canvas. Compare with <see cref="Description"/>, which is the
+    /// longer prose shown as a secondary line in the picker and as a
+    /// hover tooltip on the node.
+    /// </summary>
+    public string Name { get; init; } = string.Empty;
+
+    /// <summary>
+    /// Longer prose describing what the block does. Shown beneath the
+    /// <see cref="Name"/> as a secondary line in the picker dialog and
+    /// as a native SVG &lt;title&gt; hover tooltip on the node body.
     /// </summary>
     public string Description { get; init; } = string.Empty;
 

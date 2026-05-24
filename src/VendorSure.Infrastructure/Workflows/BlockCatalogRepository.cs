@@ -10,6 +10,7 @@ internal sealed class BlockCatalogRepository : IBlockCatalogRepository
     private const string SelectColumns = @"
         id              AS Id,
         node_type_id    AS NodeTypeId,
+        name            AS Name,
         description     AS Description,
         class_name      AS ClassName,
         is_active       AS IsActive,
@@ -27,13 +28,14 @@ internal sealed class BlockCatalogRepository : IBlockCatalogRepository
     {
         // Order matches how the palette renders: group by node type so
         // Process blocks cluster together and Decision blocks cluster
-        // together, then alphabetic within each group so the palette
-        // is stable across sessions.
+        // together, then alphabetic by name within each group so the
+        // palette is stable across sessions and reads naturally in the
+        // picker dialog.
         const string sql = @"
             SELECT " + SelectColumns + @"
             FROM dbo.block_catalog
             WHERE is_active = 1
-            ORDER BY node_type_id ASC, description ASC;";
+            ORDER BY node_type_id ASC, name ASC;";
 
         using var connection = await _connectionFactory.CreateOpenConnectionAsync(ct);
         var command = new CommandDefinition(sql, cancellationToken: ct);

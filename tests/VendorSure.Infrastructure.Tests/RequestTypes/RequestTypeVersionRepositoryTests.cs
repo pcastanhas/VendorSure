@@ -715,10 +715,14 @@ public sealed class RequestTypeVersionRepositoryTests : IClassFixture<Infrastruc
         // to satisfy CK_workflow_nodes_block_by_type at insert time.
         using var c = await _connectionFactory.CreateOpenConnectionAsync();
         return await c.QuerySingleAsync<int>(@"
-            INSERT INTO dbo.block_catalog (node_type_id, description, class_name, is_active)
-            VALUES (2, @desc, 'VendorSure.Test.NoOpBlock', 1);
+            INSERT INTO dbo.block_catalog (node_type_id, name, description, class_name, is_active)
+            VALUES (2, @name, @desc, 'VendorSure.Test.NoOpBlock', 1);
             SELECT CAST(SCOPE_IDENTITY() AS int);",
-            new { desc = "_test_block_" + Guid.NewGuid().ToString("N") });
+            new
+            {
+                name = "_test_blk_" + Guid.NewGuid().ToString("N").Substring(0, 8),
+                desc = "_test_block_" + Guid.NewGuid().ToString("N"),
+            });
     }
 
     private async Task DeleteTestBlockAsync(int blockId)

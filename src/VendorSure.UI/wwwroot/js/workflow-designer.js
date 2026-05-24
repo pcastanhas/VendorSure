@@ -210,6 +210,16 @@ export async function mount(selector, graphData, dotNetRef) {
         const sel = d3.select(this);
         const style = NODE_STYLE[d.nodeTypeId] || NODE_STYLE[NODE_TYPE.Process];
         drawShape(sel, style);
+
+        // Native SVG hover tooltip — appended FIRST so browsers know to
+        // pick it up for any element inside the <g>. Only emitted when
+        // the node has a block with a description. Start, Approved,
+        // Rejected, Cancelled have no block, so no tooltip — their
+        // shape and label are self-explanatory.
+        if (d.blockDescription) {
+            sel.append("title").text(d.blockDescription);
+        }
+
         sel.append("text")
             .attr("text-anchor", "middle")
             .attr("dominant-baseline", "middle")
@@ -577,6 +587,14 @@ function onDeleteClick(event, nodeId, dotNetRef) {
 // --- shape drawing -------------------------------------------------------
 
 function nodeLabel(node) {
+    // Prefer the block's name when this node has one (Process or
+    // Decision with a block_catalog_id). Falls back to the generic
+    // node-type label ("Process", "Decision", "Start", "Approved", ...).
+    // Start and terminals never have a block, so they always use the
+    // type label.
+    if (node.blockName) {
+        return node.blockName;
+    }
     return NODE_LABEL[node.nodeTypeId] || `Type ${node.nodeTypeId}`;
 }
 

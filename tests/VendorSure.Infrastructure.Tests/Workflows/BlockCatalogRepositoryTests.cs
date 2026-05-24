@@ -38,12 +38,12 @@ public sealed class BlockCatalogRepositoryTests
         {
             // Two active rows — one Process (node_type_id=2), one Decision (3).
             var processId = await InsertBlockAsync(
-                nodeTypeId: 2, description: $"{prefix}_proc",
+                nodeTypeId: 2, name: $"{prefix}_proc_n", description: $"{prefix}_proc",
                 className: "VendorSure.Test.ProcBlock", isActive: true, color: "#abcdef");
             insertedIds.Add(processId);
 
             var decisionId = await InsertBlockAsync(
-                nodeTypeId: 3, description: $"{prefix}_dec",
+                nodeTypeId: 3, name: $"{prefix}_dec_n", description: $"{prefix}_dec",
                 className: "VendorSure.Test.DecBlock", isActive: true, color: null);
             insertedIds.Add(decisionId);
 
@@ -53,6 +53,7 @@ public sealed class BlockCatalogRepositoryTests
 
             var proc = mine.Single(b => b.Id == processId);
             Assert.Equal(2, proc.NodeTypeId);
+            Assert.Equal($"{prefix}_proc_n", proc.Name);
             Assert.Equal($"{prefix}_proc", proc.Description);
             Assert.Equal("VendorSure.Test.ProcBlock", proc.ClassName);
             Assert.True(proc.IsActive);
@@ -60,6 +61,7 @@ public sealed class BlockCatalogRepositoryTests
 
             var dec = mine.Single(b => b.Id == decisionId);
             Assert.Equal(3, dec.NodeTypeId);
+            Assert.Equal($"{prefix}_dec_n", dec.Name);
             Assert.Equal($"{prefix}_dec", dec.Description);
             Assert.Equal("VendorSure.Test.DecBlock", dec.ClassName);
             Assert.True(dec.IsActive);
@@ -79,12 +81,12 @@ public sealed class BlockCatalogRepositoryTests
         try
         {
             var activeId = await InsertBlockAsync(
-                nodeTypeId: 2, description: $"{prefix}_active",
+                nodeTypeId: 2, name: $"{prefix}_active_n", description: $"{prefix}_active",
                 className: "VendorSure.Test.Active", isActive: true, color: null);
             insertedIds.Add(activeId);
 
             var inactiveId = await InsertBlockAsync(
-                nodeTypeId: 2, description: $"{prefix}_inactive",
+                nodeTypeId: 2, name: $"{prefix}_inactive_n", description: $"{prefix}_inactive",
                 className: "VendorSure.Test.Inactive", isActive: false, color: null);
             insertedIds.Add(inactiveId);
 
@@ -102,7 +104,7 @@ public sealed class BlockCatalogRepositoryTests
     }
 
     [Fact]
-    public async Task ListActiveAsync_orders_by_node_type_then_description()
+    public async Task ListActiveAsync_orders_by_node_type_then_name()
     {
         var prefix = "_test_bc_" + Guid.NewGuid().ToString("N");
         var insertedIds = new List<int>();
@@ -110,24 +112,29 @@ public sealed class BlockCatalogRepositoryTests
         {
             // Insert four rows: 2 Process (zeta, alpha) and 2 Decision (gamma,
             // beta), in a deliberately wrong order so we can verify the SQL
-            // ORDER BY clause actually sorts them.
-            var procZ = await InsertBlockAsync(2, $"{prefix}_proc_zeta", "X", true, null);
+            // ORDER BY clause actually sorts them. Names drive the sort
+            // post-Chunk-10-cleanup; descriptions are unrelated to ordering.
+            var procZ = await InsertBlockAsync(
+                2, $"{prefix}_proc_zeta", "desc z", "X", true, null);
             insertedIds.Add(procZ);
 
-            var decG = await InsertBlockAsync(3, $"{prefix}_dec_gamma", "X", true, null);
+            var decG = await InsertBlockAsync(
+                3, $"{prefix}_dec_gamma", "desc g", "X", true, null);
             insertedIds.Add(decG);
 
-            var procA = await InsertBlockAsync(2, $"{prefix}_proc_alpha", "X", true, null);
+            var procA = await InsertBlockAsync(
+                2, $"{prefix}_proc_alpha", "desc a", "X", true, null);
             insertedIds.Add(procA);
 
-            var decB = await InsertBlockAsync(3, $"{prefix}_dec_beta", "X", true, null);
+            var decB = await InsertBlockAsync(
+                3, $"{prefix}_dec_beta", "desc b", "X", true, null);
             insertedIds.Add(decB);
 
             var all = await _catalog.ListActiveAsync();
-            var mine = all.Where(b => b.Description.StartsWith(prefix)).ToList();
+            var mine = all.Where(b => b.Name.StartsWith(prefix)).ToList();
 
             // Expected order: all Process (alpha, zeta), then all Decision
-            // (beta, gamma). node_type_id ASC, description ASC.
+            // (beta, gamma). node_type_id ASC, name ASC.
             Assert.Collection(mine,
                 b => Assert.Equal(procA, b.Id),
                 b => Assert.Equal(procZ, b.Id),
@@ -152,15 +159,15 @@ public sealed class BlockCatalogRepositoryTests
     // --- helpers ---------------------------------------------------------
 
     private async Task<int> InsertBlockAsync(
-        int nodeTypeId, string description, string className, bool isActive, string? color)
+        int nodeTypeId, string name, string description, string className, bool isActive, string? color)
     {
         using var connection = await _connectionFactory.CreateOpenConnectionAsync();
         return await connection.QuerySingleAsync<int>(@"
             INSERT INTO dbo.block_catalog
-                (node_type_id, description, class_name, is_active, color)
-            VALUES (@nodeTypeId, @description, @className, @isActive, @color);
+                (node_type_id, name, description, class_name, is_active, color)
+            VALUES (@nodeTypeId, @name, @description, @className, @isActive, @color);
             SELECT CAST(SCOPE_IDENTITY() AS int);",
-            new { nodeTypeId, description, className, isActive, color });
+            new { nodeTypeId, name, description, className, isActive, color });
     }
 
     private async Task CleanupAsync(IEnumerable<int> ids)

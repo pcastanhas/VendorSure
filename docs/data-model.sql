@@ -141,10 +141,16 @@ GO
 /*  block_catalog
     IT-authored blocks. Each block declares which node type slot it fills
     (Process or Decision per the allows_block invariant, enforced below).
-    color is an optional per-block override of the node-type default. */
+    color is an optional per-block override of the node-type default.
+
+    name is the short label shown to workflow authors in the picker
+    dialog and rendered as the label on each node on the canvas.
+    description is the longer prose shown as a secondary line in the
+    picker and as a native hover tooltip on the node body. */
 CREATE TABLE [dbo].[block_catalog] (
     [id]            int             IDENTITY(1,1) NOT NULL,
     [node_type_id]  int             NOT NULL,
+    [name]          nvarchar(50)    NOT NULL,
     [description]   nvarchar(200)   NOT NULL,
     [class_name]    nvarchar(200)   NOT NULL,   -- the .NET class implementing the block
     [is_active]     bit             NOT NULL CONSTRAINT [DF_block_catalog_is_active] DEFAULT (1),

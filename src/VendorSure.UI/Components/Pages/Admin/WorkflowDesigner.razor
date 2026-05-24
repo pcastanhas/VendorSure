@@ -187,7 +187,10 @@ else
                             <div style="width: 14px; height: 14px; border-radius: 3px;
                                         background-color: @(b.Color ?? DefaultColorFor(b.NodeTypeId));
                                         border: 1px solid rgba(0,0,0,0.15);"></div>
-                            <MudText Typo="Typo.body2">@b.Description</MudText>
+                            <MudStack Spacing="0">
+                                <MudText Typo="Typo.body2">@b.Name</MudText>
+                                <MudText Typo="Typo.caption" Class="mud-text-secondary">@b.Description</MudText>
+                            </MudStack>
                         </MudStack>
                     </div>
                 }
@@ -204,7 +207,10 @@ else
                             <div style="width: 14px; height: 14px; border-radius: 3px;
                                         background-color: @(b.Color ?? DefaultColorFor(b.NodeTypeId));
                                         border: 1px solid rgba(0,0,0,0.15);"></div>
-                            <MudText Typo="Typo.body2">@b.Description</MudText>
+                            <MudStack Spacing="0">
+                                <MudText Typo="Typo.body2">@b.Name</MudText>
+                                <MudText Typo="Typo.caption" Class="mud-text-secondary">@b.Description</MudText>
+                            </MudStack>
                         </MudStack>
                     </div>
                 }
@@ -554,15 +560,34 @@ else
         // non-empty slot → on the edge between parent and child). Emit
         // them alongside the other fields rather than reconstructing
         // from the edge list on the JS side.
-        var nodes = _nodes.Select(n => new
+        //
+        // Also enrich each node with its block's name and description
+        // (when the node has a BlockCatalogId). The JS renders the
+        // block name as the node label and the description as a native
+        // SVG <title> hover tooltip. Nodes without a block (Start and
+        // terminals) get nulls and fall back to the generic node-type
+        // label, no tooltip.
+        var blocksById = _blocks.ToDictionary(b => b.Id!.Value);
+
+        var nodes = _nodes.Select(n =>
         {
-            id = n.Id,
-            nodeTypeId = n.NodeTypeId,
-            blockCatalogId = n.BlockCatalogId,
-            executionLevel = n.ExecutionLevel,
-            path1NodeId = n.Path1NodeId,
-            path2NodeId = n.Path2NodeId,
-            promptText = n.PromptText,
+            BlockCatalog? block = null;
+            if (n.BlockCatalogId is int bcId && blocksById.TryGetValue(bcId, out var found))
+            {
+                block = found;
+            }
+            return new
+            {
+                id = n.Id,
+                nodeTypeId = n.NodeTypeId,
+                blockCatalogId = n.BlockCatalogId,
+                blockName = block?.Name,
+                blockDescription = block?.Description,
+                executionLevel = n.ExecutionLevel,
+                path1NodeId = n.Path1NodeId,
+                path2NodeId = n.Path2NodeId,
+                promptText = n.PromptText,
+            };
         }).ToArray();
 
         var edges = new List<object>();
