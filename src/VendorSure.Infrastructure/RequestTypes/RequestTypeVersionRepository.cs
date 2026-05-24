@@ -112,6 +112,111 @@ internal sealed class RequestTypeVersionRepository : IRequestTypeVersionReposito
             : UpdateRequestTypeVersionResult.NotFound;
     }
 
+    public async Task<TransitionToInServiceResult> TransitionToInServiceAsync(
+        int versionId, CancellationToken ct = default)
+    {
+        // Two-statement transactional transition:
+        //   1) Demote prior In Service of the same type to Superseded.
+        //   2) Promote the target Draft to In Service.
+        //
+        // The initial SELECT with UPDLOCK serialises concurrent callers
+        // attempting to transition the same Draft: the second caller
+        // blocks until the first commits, then re-reads and sees
+        // request_state != 'D' on the row, so its @TypeId comes back NULL
+        // and it bails. This rules out the race where two callers each
+        // demote the other's not-yet-promoted row.
+        using var connection = await _connectionFactory.CreateOpenConnectionAsync(ct);
+        using var transaction = connection.BeginTransaction();
+
+        // One timestamp value used for both UPDATEs so the new InService's
+        // placed_in_service_ts equals the prior InService's superseded_ts
+        // exactly. Captured here rather than via SYSUTCDATETIME() in each
+        // statement to make the audit story crisp.
+        var transitionAt = DateTime.UtcNow;
+
+        try
+        {
+            // 1. UPDLOCK on the Draft row — locks it for this transaction so
+            //    no other transition can race past us between read and update.
+            var typeId = await connection.QuerySingleOrDefaultAsync<int?>(
+                new CommandDefinition(
+                    @"SELECT request_type_id
+                      FROM dbo.request_type_versions WITH (UPDLOCK, ROWLOCK)
+                      WHERE id = @versionId
+                        AND request_state = @draftCode;",
+                    new { versionId, draftCode = RequestStateCodes.Draft },
+                    transaction,
+                    cancellationToken: ct));
+
+            if (typeId is null)
+            {
+                // Bail before any UPDATEs run. Probe within the same
+                // (read-only) transaction so we don't introduce a second
+                // network round-trip pattern that could race with our own
+                // rollback. The row either doesn't exist (NotFound) or
+                // exists but isn't Draft (NotDraft).
+                var rowExists = await connection.ExecuteScalarAsync<int>(
+                    new CommandDefinition(
+                        "SELECT COUNT(*) FROM dbo.request_type_versions WHERE id = @versionId;",
+                        new { versionId },
+                        transaction,
+                        cancellationToken: ct)) > 0;
+
+                transaction.Rollback();
+
+                return rowExists
+                    ? TransitionToInServiceResult.RejectedNotDraft
+                    : TransitionToInServiceResult.NotFound;
+            }
+
+            // 2. Demote the prior In Service of this type (if any). The
+            //    schema doesn't enforce at-most-one-InService-per-type so
+            //    in pathological data we might demote several; that's
+            //    still the right thing.
+            await connection.ExecuteAsync(
+                new CommandDefinition(
+                    @"UPDATE dbo.request_type_versions
+                      SET request_state = @supersededCode,
+                          superseded_ts = @transitionAt
+                      WHERE request_type_id = @typeId
+                        AND request_state = @inServiceCode;",
+                    new
+                    {
+                        typeId = typeId.Value,
+                        supersededCode = RequestStateCodes.Superseded,
+                        inServiceCode = RequestStateCodes.InService,
+                        transitionAt,
+                    },
+                    transaction,
+                    cancellationToken: ct));
+
+            // 3. Promote the target Draft to In Service. The UPDLOCK above
+            //    means the WHERE on @versionId still matches a Draft row.
+            await connection.ExecuteAsync(
+                new CommandDefinition(
+                    @"UPDATE dbo.request_type_versions
+                      SET request_state = @inServiceCode,
+                          placed_in_service_ts = @transitionAt
+                      WHERE id = @versionId;",
+                    new
+                    {
+                        versionId,
+                        inServiceCode = RequestStateCodes.InService,
+                        transitionAt,
+                    },
+                    transaction,
+                    cancellationToken: ct));
+
+            transaction.Commit();
+            return TransitionToInServiceResult.Succeeded;
+        }
+        catch
+        {
+            transaction.Rollback();
+            throw;
+        }
+    }
+
     // ---- shared SELECTs and mapping ------------------------------------
 
     private const string SelectColumns = @"

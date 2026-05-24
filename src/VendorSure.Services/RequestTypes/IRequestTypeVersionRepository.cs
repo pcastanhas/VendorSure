@@ -26,6 +26,26 @@ public enum UpdateRequestTypeVersionResult
     RejectedNotDraft,
 }
 
+/// <summary>Outcome of <see cref="IRequestTypeVersionRepository.TransitionToInServiceAsync"/>.</summary>
+public enum TransitionToInServiceResult
+{
+    /// <summary>
+    /// The target version is now In Service. If a prior In Service version
+    /// of the same type existed, it was atomically moved to Superseded in
+    /// the same transaction with <c>superseded_ts</c> set.
+    /// </summary>
+    Succeeded,
+
+    /// <summary>The target version doesn't exist.</summary>
+    NotFound,
+
+    /// <summary>
+    /// The target version exists but isn't currently in Draft state. Only
+    /// Drafts can be placed in service.
+    /// </summary>
+    RejectedNotDraft,
+}
+
 /// <summary>
 /// CRUD on <c>request_type_versions</c>. Each row is an immutable snapshot
 /// of one version of a Request Type's required-docs, validations, prompts,
@@ -34,10 +54,11 @@ public enum UpdateRequestTypeVersionResult
 /// <remarks>
 /// Immutability is enforced here: <see cref="UpdateAsync"/> refuses unless
 /// the target row is in <see cref="RequestState.Draft"/>. State transitions
-/// (Draft → InService → Superseded) are intentionally NOT exposed in this
-/// chunk; they ship in Phase 4 / Chunk 9 with their own focused method,
-/// because transitioning requires atomically updating multiple rows (the
-/// new InService and the currently-InService-becoming-Superseded sibling).
+/// are intentionally narrow — only <see cref="TransitionToInServiceAsync"/>
+/// promotes a Draft to In Service (with the side-effect of demoting the
+/// prior In Service to Superseded). There is no "transition back to Draft"
+/// path and there is no "delete this version" path; both would violate the
+/// snapshot semantics that running requests rely on.
 /// </remarks>
 public interface IRequestTypeVersionRepository
 {
@@ -66,10 +87,25 @@ public interface IRequestTypeVersionRepository
     /// <remarks>
     /// <see cref="RequestTypeVersion.Version"/>, <see cref="RequestTypeVersion.RequestTypeId"/>,
     /// timestamps, and the state itself are NOT touched by this method;
-    /// those are either DB-managed or only changed by the state-transition
-    /// method shipped in Chunk 9. Edits to the version's required-docs and
-    /// validations are managed by their own junction repositories.
+    /// those are either DB-managed or only changed by
+    /// <see cref="TransitionToInServiceAsync"/>. Edits to the version's
+    /// required-docs and validations are managed by their own junction
+    /// repositories.
     /// </remarks>
     Task<UpdateRequestTypeVersionResult> UpdateAsync(
         RequestTypeVersion version, CancellationToken ct = default);
+
+    /// <summary>
+    /// Promotes the given Draft version to In Service. If another version
+    /// of the same type is currently In Service, it is atomically demoted
+    /// to Superseded in the same transaction; both rows' timestamps
+    /// (<c>placed_in_service_ts</c> on the new, <c>superseded_ts</c> on the
+    /// old) are set to the same SYSUTCDATETIME value.
+    /// </summary>
+    /// <remarks>
+    /// Concurrent calls for the same version are serialised by an UPDLOCK
+    /// on the initial Draft-state check; only one transition can succeed.
+    /// </remarks>
+    Task<TransitionToInServiceResult> TransitionToInServiceAsync(
+        int versionId, CancellationToken ct = default);
 }

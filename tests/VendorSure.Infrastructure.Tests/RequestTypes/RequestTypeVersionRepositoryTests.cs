@@ -246,6 +246,161 @@ public sealed class RequestTypeVersionRepositoryTests : IClassFixture<Infrastruc
         }
     }
 
+    [Fact]
+    public async Task TransitionToInServiceAsync_promotes_draft_with_no_prior_in_service()
+    {
+        var typeId = await CreateTestTypeAsync();
+        try
+        {
+            var v1 = await _versions.CreateDraftAsync(typeId);
+            var versionId = v1.Id!.Value;
+
+            var result = await _versions.TransitionToInServiceAsync(versionId);
+            Assert.Equal(TransitionToInServiceResult.Succeeded, result);
+
+            var fetched = await _versions.GetByIdAsync(versionId);
+            Assert.NotNull(fetched);
+            Assert.Equal(RequestState.InService, fetched!.RequestState);
+            Assert.NotNull(fetched.PlacedInServiceTs);
+            Assert.Null(fetched.SupersededTs);
+        }
+        finally
+        {
+            await DeleteVersionsForTypeAsync(typeId);
+            await DeleteTypeAsync(typeId);
+        }
+    }
+
+    [Fact]
+    public async Task TransitionToInServiceAsync_supersedes_prior_in_service_atomically()
+    {
+        // The headline test. v1 is forced In Service, then v2 is created
+        // and promoted via TransitionToInServiceAsync. After the call:
+        //   - v2 is In Service with placed_in_service_ts set
+        //   - v1 is Superseded with superseded_ts set
+        //   - the timestamps are equal (single value captured in C# and
+        //     passed to both UPDATEs).
+        var typeId = await CreateTestTypeAsync();
+        try
+        {
+            var v1 = await _versions.CreateDraftAsync(typeId);
+            var v1Id = v1.Id!.Value;
+            await ForceVersionStateAsync(v1Id, RequestStateCodes.InService);
+
+            var v2 = await _versions.CreateDraftAsync(typeId);
+            var v2Id = v2.Id!.Value;
+
+            var result = await _versions.TransitionToInServiceAsync(v2Id);
+            Assert.Equal(TransitionToInServiceResult.Succeeded, result);
+
+            var v2Fetched = await _versions.GetByIdAsync(v2Id);
+            var v1Fetched = await _versions.GetByIdAsync(v1Id);
+
+            Assert.Equal(RequestState.InService, v2Fetched!.RequestState);
+            Assert.NotNull(v2Fetched.PlacedInServiceTs);
+            Assert.Null(v2Fetched.SupersededTs);
+
+            Assert.Equal(RequestState.Superseded, v1Fetched!.RequestState);
+            Assert.NotNull(v1Fetched.SupersededTs);
+
+            // The two timestamps should be identical (same DateTime value
+            // captured once and used for both UPDATEs). Allow a tiny
+            // millisecond fudge for any rounding at the SQL Server side
+            // — datetime2 precision is fine but Dapper round-tripping
+            // through DateTime can lose sub-tick precision.
+            var delta = (v2Fetched.PlacedInServiceTs!.Value - v1Fetched.SupersededTs!.Value).Duration();
+            Assert.True(delta < TimeSpan.FromMilliseconds(1),
+                $"Expected matching transition timestamps; got delta={delta}.");
+        }
+        finally
+        {
+            await DeleteVersionsForTypeAsync(typeId);
+            await DeleteTypeAsync(typeId);
+        }
+    }
+
+    [Fact]
+    public async Task TransitionToInServiceAsync_returns_NotFound_for_unknown_id()
+    {
+        var result = await _versions.TransitionToInServiceAsync(int.MaxValue - 1);
+        Assert.Equal(TransitionToInServiceResult.NotFound, result);
+    }
+
+    [Fact]
+    public async Task TransitionToInServiceAsync_returns_RejectedNotDraft_for_InService_target()
+    {
+        var typeId = await CreateTestTypeAsync();
+        try
+        {
+            var v1 = await _versions.CreateDraftAsync(typeId);
+            await ForceVersionStateAsync(v1.Id!.Value, RequestStateCodes.InService);
+
+            var result = await _versions.TransitionToInServiceAsync(v1.Id.Value);
+            Assert.Equal(TransitionToInServiceResult.RejectedNotDraft, result);
+        }
+        finally
+        {
+            await DeleteVersionsForTypeAsync(typeId);
+            await DeleteTypeAsync(typeId);
+        }
+    }
+
+    [Fact]
+    public async Task TransitionToInServiceAsync_returns_RejectedNotDraft_for_Superseded_target()
+    {
+        var typeId = await CreateTestTypeAsync();
+        try
+        {
+            var v1 = await _versions.CreateDraftAsync(typeId);
+            await ForceVersionStateAsync(v1.Id!.Value, RequestStateCodes.Superseded);
+
+            var result = await _versions.TransitionToInServiceAsync(v1.Id.Value);
+            Assert.Equal(TransitionToInServiceResult.RejectedNotDraft, result);
+        }
+        finally
+        {
+            await DeleteVersionsForTypeAsync(typeId);
+            await DeleteTypeAsync(typeId);
+        }
+    }
+
+    [Fact]
+    public async Task TransitionToInServiceAsync_does_not_touch_other_types()
+    {
+        // Two unrelated types each with an In Service version. Promoting
+        // v2 of type A must NOT supersede the In Service version of type
+        // B. (The demote SQL filters on request_type_id; this test
+        // guards against a regression where the filter is dropped.)
+        var typeAId = await CreateTestTypeAsync();
+        var typeBId = await CreateTestTypeAsync();
+        try
+        {
+            // Type A: v1 InService, v2 Draft (target).
+            var a1 = await _versions.CreateDraftAsync(typeAId);
+            await ForceVersionStateAsync(a1.Id!.Value, RequestStateCodes.InService);
+            var a2 = await _versions.CreateDraftAsync(typeAId);
+
+            // Type B: v1 InService, untouched.
+            var b1 = await _versions.CreateDraftAsync(typeBId);
+            await ForceVersionStateAsync(b1.Id!.Value, RequestStateCodes.InService);
+
+            var result = await _versions.TransitionToInServiceAsync(a2.Id!.Value);
+            Assert.Equal(TransitionToInServiceResult.Succeeded, result);
+
+            // Type B's InService should be untouched.
+            var b1After = await _versions.GetByIdAsync(b1.Id.Value);
+            Assert.Equal(RequestState.InService, b1After!.RequestState);
+            Assert.Null(b1After.SupersededTs);
+        }
+        finally
+        {
+            await DeleteVersionsForTypeAsync(typeAId);
+            await DeleteVersionsForTypeAsync(typeBId);
+            await DeleteTypeAsync(typeAId);
+            await DeleteTypeAsync(typeBId);
+        }
+    }
+
     // ---- helpers --------------------------------------------------------
 
     private async Task<int> CreateTestTypeAsync()

@@ -4,15 +4,18 @@
 
 ## Where we are
 
-**Phase 4 in progress.** Chunks 1-8 done (repositories for type +
-version, junction, validations + validation-doc junction; admin
-list page; detail page with header section + type-level edit + tabs
-scaffold; Required Documents tab; Validations tab; Selection Prompt
-tab). Next: Phase 4 / Chunk 9 (state transitions — Create new Draft,
-Place in Service, Supersede).
+**Phase 4 chunks complete (1-9).** All nine chunks shipped:
+repositories for type + version + junctions + validations +
+validation-doc junction; admin list page; detail page with header,
+type-level edit, version selector, version-level edits; all four
+tabs filled (Workflows placeholder for Phase 5, Required Documents,
+Validations, Selection Prompt); state transitions (Create new Draft,
+Place in Service with atomic prior-In-Service supersede). Next: the
+Phase 4 rollup commit (docs sync — BUILD / CONCEPT / LessonsLearned /
+PLAN — same pattern as the Phase 1-3 rollups).
 
 Read these to get oriented:
-- `docs/PLAN.md` — the phase/chunk roadmap. **Next step is Phase 4 / Chunk 9.**
+- `docs/PLAN.md` — the phase/chunk roadmap. **Next step is the Phase 4 doc rollup.**
 - `docs/data-model.sql` — the reviewed schema.
 - `docs/CONCEPT.md` — design intent. §3.3 covers Settings, User Groups,
   Users, Required Documents admin pages; §3.1 and §3.2 still scheduled
@@ -108,32 +111,32 @@ and `dotnet test`, reports back.
 
 ## Suggested next session
 
-**Phase 4 / Chunk 9 — State transitions.**
+**Phase 4 doc rollup.**
 
-Per `docs/PLAN.md` Phase 4 Chunk 9: the buttons and SQL that turn
-Drafts into In-Service versions and supersede the prior In-Service.
-Three operations on `IRequestTypeVersionRepository`:
+Same pattern as the Phase 1, 2, and 3 rollups: one commit that syncs
+the docs to the shipped surface. Specifically:
 
-  - **Create new Draft.** Atomic insert of the next version (existing
-    `CreateDraftAsync`'s behavior). UI: button on the detail page,
-    visible only when there's no current Draft.
-  - **Place in Service.** A single Draft transitions to InService, AND
-    the prior InService (if any) transitions to Superseded — both
-    atomic in a transaction, with both timestamps set
-    (`placed_in_service_ts` and `superseded_ts`). Until now nothing
-    has written `request_state` other than the seed Draft; this is
-    the first repo method that mutates state. Worth a dedicated
-    `TransitionToInServiceAsync` method.
-  - **View Superseded versions.** The version selector already lists
-    Superseded versions — Chunk 9 just needs to make sure the
-    'Create new Draft' button is hidden when one already exists, and
-    add 'Place in Service' to the version-section UI when the
-    displayed version is Draft.
+  - **BUILD.md** — "What's currently built" section covering the
+    Request Types admin (list page, detail page, all four tabs,
+    state transitions). The test-cleanup SQL block already includes
+    the request-type tables.
+  - **CONCEPT.md §3.3** — section is partially through Phase 3 in
+    the live repo. Update to cover the Request Type editor surface
+    and the lifecycle/versioning story now that it's actually
+    implemented.
+  - **LessonsLearned.md** — any patterns or catches from Phase 4
+    chunks 1-9 that should be remembered. Notable candidates:
+    the UPDLOCK pattern from Chunk 9's TransitionToInServiceAsync;
+    the same-version invariant via INNER JOIN from Chunk 3; the
+    "transient pre-commit MudBlazor API surface check" habit that
+    caught three real bugs across Chunks 5-7.
+  - **PLAN.md** — mark Phase 4 complete; the Phase 5 (Workflow
+    Designer) entry should be revisited because we now know more
+    about how the editor is structured (the Workflows tab on the
+    detail page is the entry point).
 
-Tests live with the chunk: at least one for the atomic state
-transition (Draft → InService AND prior InService → Superseded in
-one transaction). This is the first place a multi-row state
-transition lands; carries the same atomicity rigor as
-CreateWithFirstDraftAsync.
+After the rollup: Phase 5 (Workflow Designer) begins with a fresh
+design conversation. The Phase 4 detail page's Workflows tab is the
+landing surface; what happens inside it is the Phase 5 work.
 
 PAT note: each session, user provides a short-lived PAT for the repo.

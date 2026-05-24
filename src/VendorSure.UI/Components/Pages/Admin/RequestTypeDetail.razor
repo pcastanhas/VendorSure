@@ -8,6 +8,7 @@
 
 @inject IRequestTypeRepository TypeRepository
 @inject IRequestTypeVersionRepository VersionRepository
+@inject IDialogService DialogService
 @inject ISnackbar Snackbar
 @inject NavigationManager Navigation
 @inject ILogger<RequestTypeDetail> Logger
@@ -117,11 +118,44 @@ else
                 </MudItem>
             </MudGrid>
 
+            <MudStack Row="true" Class="mt-3" Spacing="2">
+                <MudSpacer />
+                @if (_selectedVersion is not null && _selectedVersion.RequestState == RequestState.Draft)
+                {
+                    <MudButton Variant="Variant.Filled"
+                               Color="Color.Success"
+                               StartIcon="@Icons.Material.Filled.PublishedWithChanges"
+                               OnClick="PlaceInServiceAsync"
+                               Disabled="@_transitioning">
+                        Place v@(_selectedVersion.Version) in service
+                    </MudButton>
+                }
+                @if (!HasDraft)
+                {
+                    <MudButton Variant="Variant.Outlined"
+                               Color="Color.Primary"
+                               StartIcon="@Icons.Material.Filled.NoteAdd"
+                               OnClick="CreateNewDraftAsync"
+                               Disabled="@_transitioning">
+                        Create new Draft
+                    </MudButton>
+                }
+            </MudStack>
+
             @if (_selectedVersion is not null && _selectedVersion.RequestState != RequestState.Draft)
             {
                 <MudAlert Severity="Severity.Info" Class="mt-3" Dense="true">
                     Version v@(_selectedVersion.Version) is <strong>@StateLabel(_selectedVersion.RequestState)</strong>
-                    and immutable. To make changes, create a new Draft (coming in Chunk 9).
+                    and immutable.
+                    @if (!HasDraft)
+                    {
+                        <span>Click <strong>Create new Draft</strong> above to make a v@(_versions.Max(v => v.Version) + 1) Draft for editing.</span>
+                    }
+                    else
+                    {
+                        var draft = _versions.First(v => v.RequestState == RequestState.Draft);
+                        <span>Switch to v@(draft.Version) (Draft) to edit.</span>
+                    }
                 </MudAlert>
             }
         }
@@ -192,9 +226,11 @@ else
 
     private bool _loading = true;
     private bool _savingType;
+    private bool _transitioning;
 
     private string PageTitleText => _type is null ? "Request Type" : _type.Name;
     private bool TypeNameIsInvalid => string.IsNullOrWhiteSpace(_editedName);
+    private bool HasDraft => _versions.Any(v => v.RequestState == RequestState.Draft);
 
     protected override async Task OnParametersSetAsync()
     {
@@ -308,6 +344,119 @@ else
         finally
         {
             _savingType = false;
+        }
+    }
+
+    private async Task CreateNewDraftAsync()
+    {
+        if (_type is null || _transitioning) return;
+
+        _transitioning = true;
+        try
+        {
+            var result = await VersionRepository.CreateDraftAsync(_type.Id);
+            switch (result.Outcome)
+            {
+                case CreateDraftOutcome.Created:
+                    Logger.LogInformation(
+                        "New Draft v{Version} (id={Id}) created on request type {TypeId}.",
+                        result.Version, result.Id, _type.Id);
+                    Snackbar.Add($"Created Draft v{result.Version}.", Severity.Success);
+
+                    // Reload then select the freshly-created Draft.
+                    await LoadAsync();
+                    if (result.Id is int newId)
+                    {
+                        _selectedVersionId = newId;
+                        _selectedVersion = _versions.FirstOrDefault(v => v.Id == newId);
+                    }
+                    break;
+
+                case CreateDraftOutcome.RejectedRequestTypeNotFound:
+                    Snackbar.Add(
+                        "Cannot create Draft: request type no longer exists.",
+                        Severity.Warning);
+                    Navigation.NavigateTo("/admin/request-types");
+                    break;
+            }
+        }
+        catch (Exception ex)
+        {
+            Logger.LogError(ex, "Failed to create new Draft on request type id={Id}.", _type.Id);
+            Snackbar.Add($"Failed to create Draft: {ex.Message}", Severity.Error);
+        }
+        finally
+        {
+            _transitioning = false;
+        }
+    }
+
+    private async Task PlaceInServiceAsync()
+    {
+        if (_selectedVersion is null || _transitioning) return;
+        if (_selectedVersion.RequestState != RequestState.Draft) return;
+
+        // Confirm — placing in service is the first irreversible transition
+        // and supersedes the prior In Service if any. Make sure the admin
+        // understands the side-effect.
+        var priorInService = _versions.FirstOrDefault(v => v.RequestState == RequestState.InService);
+        var priorMessage = priorInService is null
+            ? "This will make this version the live one for new submissions."
+            : $"This will make this version the live one for new submissions and "
+              + $"<strong>supersede v{priorInService.Version}</strong>, which becomes read-only.";
+
+        var confirmed = await DialogService.ShowMessageBoxAsync(
+            title: $"Place v{_selectedVersion.Version} in service?",
+            markupMessage: new MarkupString(priorMessage),
+            yesText: "Place in service",
+            cancelText: "Cancel",
+            options: new DialogOptions { CloseOnEscapeKey = true });
+
+        if (confirmed != true) return;
+
+        var versionId = _selectedVersion.Id;
+        _transitioning = true;
+        try
+        {
+            var result = await VersionRepository.TransitionToInServiceAsync(versionId);
+            switch (result)
+            {
+                case TransitionToInServiceResult.Succeeded:
+                    Logger.LogInformation(
+                        "Version id={VersionId} placed in service on request type {TypeId}.",
+                        versionId, _type?.Id);
+                    Snackbar.Add($"Placed v{_selectedVersion.Version} in service.", Severity.Success);
+
+                    // Reload and keep the same version selected — it's now
+                    // In Service rather than Draft.
+                    await LoadAsync();
+                    _selectedVersionId = versionId;
+                    _selectedVersion = _versions.FirstOrDefault(v => v.Id == versionId);
+                    break;
+
+                case TransitionToInServiceResult.NotFound:
+                    Snackbar.Add(
+                        "Cannot place in service: version no longer exists.",
+                        Severity.Warning);
+                    await LoadAsync();
+                    break;
+
+                case TransitionToInServiceResult.RejectedNotDraft:
+                    Snackbar.Add(
+                        "Cannot place in service: another caller already changed this version's state.",
+                        Severity.Warning);
+                    await LoadAsync();
+                    break;
+            }
+        }
+        catch (Exception ex)
+        {
+            Logger.LogError(ex, "Failed to place version id={VersionId} in service.", versionId);
+            Snackbar.Add($"Failed: {ex.Message}", Severity.Error);
+        }
+        finally
+        {
+            _transitioning = false;
         }
     }
 
