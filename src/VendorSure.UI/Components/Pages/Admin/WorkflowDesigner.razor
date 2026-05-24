@@ -125,15 +125,12 @@ else
     }
 
     <MudPaper Class="pa-3 mb-4" Elevation="1">
-        @* Canvas div: the workflow-designer JS module owns this after
-           first mount. Blazor must not re-render inside it. The dashed
+        @* The workflow-designer JS module owns this div after first
+           mount. Blazor must not re-render inside it. The dashed
            border is a visual cue for empty / pre-mount state. The
            module draws + buttons on each non-terminal node's open
            slots when the workflow is editable (a non-null
            DotNetObjectReference signals editable to the JS side). *@
-        <MudText Typo="Typo.subtitle2" Class="mb-2 mud-text-secondary">
-            Canvas
-        </MudText>
         <div id="workflow-canvas"
              @key="_workflow.Id"
              style="width: 100%; min-height: 360px; border: 1px dashed var(--mud-palette-divider); border-radius: 4px; overflow: auto;">
