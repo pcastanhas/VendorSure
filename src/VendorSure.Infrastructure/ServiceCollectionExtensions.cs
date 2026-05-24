@@ -5,11 +5,13 @@ using VendorSure.Infrastructure.Data;
 using VendorSure.Infrastructure.Documents;
 using VendorSure.Infrastructure.Identity;
 using VendorSure.Infrastructure.RequestTypes;
+using VendorSure.Infrastructure.Workflows;
 using VendorSure.Services.Configuration;
 using VendorSure.Services.Data;
 using VendorSure.Services.Documents;
 using VendorSure.Services.Identity;
 using VendorSure.Services.RequestTypes;
+using VendorSure.Services.Workflows;
 
 namespace VendorSure.Infrastructure;
 
@@ -37,6 +39,7 @@ public static class ServiceCollectionExtensions
         services.AddScoped<IRequestTypeRequiredDocumentRepository, RequestTypeRequiredDocumentRepository>();
         services.AddScoped<IRequestTypeValidationRepository, RequestTypeValidationRepository>();
         services.AddScoped<IRequestTypeValidationDocumentRepository, RequestTypeValidationDocumentRepository>();
+        services.AddScoped<IWorkflowDefinitionRepository, WorkflowDefinitionRepository>();
         services.AddScoped<ISettingsRepository, SettingsRepository>();
 
         return services;

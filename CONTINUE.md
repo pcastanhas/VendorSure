@@ -4,21 +4,36 @@
 
 ## Where we are
 
-**Phase 4 ✓ COMPLETE.** All nine chunks plus rollup shipped:
-repositories for type + version + junctions + validations +
-validation-doc junction; admin list page; detail page with header,
-type-level edit, version selector, version-level edits; all four
-tabs filled (Workflows placeholder for Phase 5, Required Documents,
-Validations, Selection Prompt); state transitions (Create new Draft,
-Place in Service with atomic prior-In-Service supersede). Next:
-Phase 5 (Workflow Designer). Design conversation first — the chunk
-plan in PLAN.md §"Phase 5" is provisional and explicitly expected
-to evolve.
+**Phase 5 in progress.** Chunk 1 done (`WorkflowDefinition`
+repository — CRUD on `workflow_definitions` with Draft-gated
+mutations, transactional cascade-delete that handles the
+self-referential `workflow_nodes.path*` FKs). Next: Chunk 2
+(Workflows tab on the Request Type detail page).
+
+Phase 5 design settled before code:
+  - **D3.js** for the SVG canvas. No React, no build pipeline,
+    one CDN/npm dep on a stable library.
+  - **Fixed layout** computed from `execution_level` (vertical row)
+    + parent-driven horizontal slots (path1 = left, path2 = right
+    consistently). No `x`/`y` columns in the schema.
+  - **No designer-side validation.** Schema CHECKs only.
+  - **`execution_level`** = topological depth. Designer renumbers
+    downstream nodes on insert/delete; engine walks levels in Phase 6+.
+  - **Branch merging deferred** — schema permits, editor refuses.
+  - **Workflows tab → list page** on the Request Type detail page.
+  - **Designer opens on a separate route**
+    `/admin/request-types/{typeId}/workflows/{workflowId}/designer`.
+  - **Auto-save per atomic edit.** Each insert/drag/delete commits
+    its own transaction.
+  - **Block + artifact catalog seeded manually on dev DB** by the
+    user. Phase 5 code reads them as-is.
 
 Read these to get oriented:
 - `docs/PLAN.md` — the phase/chunk roadmap. **Next step is Phase 5
-  — Workflow Designer.** Provisional chunk list; expect a design
-  conversation before starting Chunk 1.
+  / Chunk 2 — Workflows tab on the Request Type detail page.** PLAN's
+  provisional Phase 5 chunk list was superseded by the design
+  conversation (see Where We Are above); the locked-in plan lives
+  in the previous chat transcript and on the commit log.
 - `docs/data-model.sql` — the reviewed schema.
 - `docs/CONCEPT.md` — design intent. §3.3 covers Settings, User Groups,
   Users, Required Documents, and the Request Type editor in detail;
@@ -113,31 +128,24 @@ and `dotnet test`, reports back.
 
 ## Suggested next session
 
-**Phase 5 — Workflow Designer.**
+**Phase 5 / Chunk 2 — Workflows tab.**
 
-The Phase 4 detail page's Workflows tab is the landing surface; what
-happens inside it is the Phase 5 work. Per PLAN.md's risk note this
-is the biggest phase by far and the only one with unfamiliar UI work
-(JS interop for a canvas library). The chunk list in PLAN.md §"Phase 5"
-is **provisional and expected to evolve** — start with a design
-conversation, not by jumping into Chunk 1.
+Replace the "ships in Phase 5" placeholder in
+`RequestTypeDetail.razor`'s Workflows tab panel with a real
+list-page component:
+  - Table of workflows for the displayed version (Name, Notes preview,
+    delete icon).
+  - "New workflow" button → small dialog (name + notes).
+  - Each row clickable → navigates to
+    `/admin/request-types/{typeId}/workflows/{workflowId}/designer`
+    (the destination 404s until Chunk 4, same nav-ahead-of-destination
+    pattern Phase 4 used).
+  - Read-only when displayed version isn't Draft. Same posture as the
+    other Phase 4 tabs.
+  - Delete confirm via `ShowMessageBoxAsync`. Maps all three
+    `DeleteWorkflowResult` outcomes to distinct snackbars.
 
-Key open questions to settle before coding:
-
-- **Canvas library.** PLAN mentions `react-flow`, `jsPlumb` Community,
-  or a pure-SVG approach. Blazor Server + JS interop is the harness.
-  Worth a spike (Chunk 3 in PLAN) before committing.
-- **Block catalog seed.** Phase 5's blocks are IT-authored externally.
-  For development, what's the minimum seed set we need to design
-  meaningful test workflows? PLAN mentions "a small handful inserted
-  manually for testing" but doesn't name them.
-- **Coordinates persistence.** The schema stores node coordinates;
-  Phase 5 Chunk 8 saves them. Decide early whether layout is
-  per-user or shared.
-- **Validation posture.** The designer is intentionally a dumb canvas
-  (per CONCEPT.md §3.3). What's the smallest set of structural checks
-  that *do* belong in the editor, if any (e.g. "every node must have
-  an incoming edge except Start")? Or do we genuinely accept that
-  broken graphs fail at runtime?
+Wires entirely to `IWorkflowDefinitionRepository` from Chunk 1 — no
+new repo work this chunk.
 
 PAT note: each session, user provides a short-lived PAT for the repo.
