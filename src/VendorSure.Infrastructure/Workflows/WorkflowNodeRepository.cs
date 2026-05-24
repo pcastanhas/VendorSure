@@ -1,0 +1,612 @@
+using System.Data;
+using Dapper;
+using VendorSure.Domain.RequestTypes;
+using VendorSure.Domain.Workflows;
+using VendorSure.Services.Data;
+using VendorSure.Services.Workflows;
+
+namespace VendorSure.Infrastructure.Workflows;
+
+internal sealed class WorkflowNodeRepository : IWorkflowNodeRepository
+{
+    private const string SelectColumns = @"
+        id                          AS Id,
+        workflow_definition_id      AS WorkflowDefinitionId,
+        node_type_id                AS NodeTypeId,
+        block_catalog_id            AS BlockCatalogId,
+        execution_level             AS ExecutionLevel,
+        approver_group_id           AS ApproverGroupId,
+        stale_threshold_days        AS StaleThresholdDays,
+        stale_message_text          AS StaleMessageText,
+        notes                       AS Notes,
+        path1_node_id               AS Path1NodeId,
+        path2_node_id               AS Path2NodeId,
+        prompt_text                 AS PromptText,
+        path1_prompt_text           AS Path1PromptText,
+        path2_prompt_text           AS Path2PromptText";
+
+    private readonly IDbConnectionFactory _connectionFactory;
+
+    public WorkflowNodeRepository(IDbConnectionFactory connectionFactory)
+    {
+        _connectionFactory = connectionFactory;
+    }
+
+    public async Task<IReadOnlyList<WorkflowNode>> ListByWorkflowIdAsync(
+        int workflowDefinitionId, CancellationToken ct = default)
+    {
+        var sql = $@"
+            SELECT {SelectColumns}
+            FROM dbo.workflow_nodes
+            WHERE workflow_definition_id = @workflowDefinitionId
+            ORDER BY execution_level ASC, id ASC;";
+
+        using var connection = await _connectionFactory.CreateOpenConnectionAsync(ct);
+        var command = new CommandDefinition(sql, new { workflowDefinitionId }, cancellationToken: ct);
+        var rows = await connection.QueryAsync<WorkflowNode>(command);
+        return rows.ToList();
+    }
+
+    public async Task<WorkflowNode?> GetByIdAsync(int id, CancellationToken ct = default)
+    {
+        var sql = $"SELECT {SelectColumns} FROM dbo.workflow_nodes WHERE id = @id;";
+
+        using var connection = await _connectionFactory.CreateOpenConnectionAsync(ct);
+        var command = new CommandDefinition(sql, new { id }, cancellationToken: ct);
+        return await connection.QuerySingleOrDefaultAsync<WorkflowNode>(command);
+    }
+
+    public async Task<CreateNodeResult> CreateAsync(WorkflowNode seed, CancellationToken ct = default)
+    {
+        // Pre-validate node_type vs block_catalog pairing so the caller
+        // gets RejectedInvalidShape rather than an SqlException from the
+        // schema CHECK. The schema is still the safety net for everyone
+        // who isn't us.
+        var requiresBlock = WorkflowNodeTypeIds.RequiresBlock(seed.NodeTypeId);
+        if (requiresBlock && seed.BlockCatalogId is null)
+        {
+            return new CreateNodeResult(CreateNodeOutcome.RejectedInvalidShape, null);
+        }
+        if (!requiresBlock && seed.BlockCatalogId is not null)
+        {
+            return new CreateNodeResult(CreateNodeOutcome.RejectedInvalidShape, null);
+        }
+
+        // Conditional INSERT: workflow exists AND its parent version is Draft.
+        // execution_level forced to 0 (unwired). path FKs forced to NULL —
+        // wiring is a separate operation.
+        const string sql = @"
+            INSERT INTO dbo.workflow_nodes
+                (workflow_definition_id, node_type_id, block_catalog_id,
+                 execution_level,
+                 approver_group_id, stale_threshold_days, stale_message_text, notes,
+                 path1_node_id, path2_node_id,
+                 prompt_text, path1_prompt_text, path2_prompt_text)
+            SELECT
+                @WorkflowDefinitionId, @NodeTypeId, @BlockCatalogId,
+                0,
+                @ApproverGroupId, @StaleThresholdDays, @StaleMessageText, @Notes,
+                NULL, NULL,
+                @PromptText, @Path1PromptText, @Path2PromptText
+            WHERE EXISTS (
+                SELECT 1
+                FROM dbo.workflow_definitions wd
+                INNER JOIN dbo.request_type_versions ver
+                    ON ver.id = wd.request_type_version_id
+                WHERE wd.id = @WorkflowDefinitionId
+                  AND ver.request_state = @DraftCode);
+            SELECT CAST(SCOPE_IDENTITY() AS int);";
+
+        using var connection = await _connectionFactory.CreateOpenConnectionAsync(ct);
+
+        var newId = await connection.QuerySingleOrDefaultAsync<int?>(
+            new CommandDefinition(
+                sql,
+                new
+                {
+                    seed.WorkflowDefinitionId,
+                    seed.NodeTypeId,
+                    seed.BlockCatalogId,
+                    seed.ApproverGroupId,
+                    seed.StaleThresholdDays,
+                    seed.StaleMessageText,
+                    seed.Notes,
+                    seed.PromptText,
+                    seed.Path1PromptText,
+                    seed.Path2PromptText,
+                    DraftCode = RequestStateCodes.Draft,
+                },
+                cancellationToken: ct));
+
+        if (newId is not null)
+        {
+            return new CreateNodeResult(CreateNodeOutcome.Created, newId);
+        }
+
+        // Probe: workflow exists at all?
+        var workflowExists = await connection.ExecuteScalarAsync<int>(
+            new CommandDefinition(
+                "SELECT COUNT(*) FROM dbo.workflow_definitions WHERE id = @id;",
+                new { id = seed.WorkflowDefinitionId },
+                cancellationToken: ct)) > 0;
+
+        return new CreateNodeResult(
+            workflowExists ? CreateNodeOutcome.RejectedNotDraft
+                           : CreateNodeOutcome.RejectedWorkflowNotFound,
+            null);
+    }
+
+    public async Task<UpdateNodeResult> UpdateAsync(WorkflowNode edited, CancellationToken ct = default)
+    {
+        // Edits only the property fields. node_type, block_catalog_id,
+        // workflow, execution_level, and path FKs are NOT touched.
+        const string updateSql = @"
+            UPDATE n
+            SET n.approver_group_id    = @ApproverGroupId,
+                n.stale_threshold_days = @StaleThresholdDays,
+                n.stale_message_text   = @StaleMessageText,
+                n.notes                = @Notes,
+                n.prompt_text          = @PromptText,
+                n.path1_prompt_text    = @Path1PromptText,
+                n.path2_prompt_text    = @Path2PromptText
+            FROM dbo.workflow_nodes n
+            INNER JOIN dbo.workflow_definitions wd ON wd.id = n.workflow_definition_id
+            INNER JOIN dbo.request_type_versions ver ON ver.id = wd.request_type_version_id
+            WHERE n.id = @Id
+              AND ver.request_state = @DraftCode;";
+
+        using var connection = await _connectionFactory.CreateOpenConnectionAsync(ct);
+        var rowsAffected = await connection.ExecuteAsync(
+            new CommandDefinition(
+                updateSql,
+                new
+                {
+                    edited.Id,
+                    edited.ApproverGroupId,
+                    edited.StaleThresholdDays,
+                    edited.StaleMessageText,
+                    edited.Notes,
+                    edited.PromptText,
+                    edited.Path1PromptText,
+                    edited.Path2PromptText,
+                    DraftCode = RequestStateCodes.Draft,
+                },
+                cancellationToken: ct));
+
+        if (rowsAffected > 0)
+        {
+            return UpdateNodeResult.Updated;
+        }
+
+        // Disambiguate: row exists or not?
+        var rowExists = await connection.ExecuteScalarAsync<int>(
+            new CommandDefinition(
+                "SELECT COUNT(*) FROM dbo.workflow_nodes WHERE id = @Id;",
+                new { edited.Id },
+                cancellationToken: ct)) > 0;
+
+        return rowExists ? UpdateNodeResult.RejectedNotDraft : UpdateNodeResult.NotFound;
+    }
+
+    public Task<SetPathOutcome> SetPath1Async(int sourceId, int? targetNodeId, CancellationToken ct = default)
+        => SetPathAsync(sourceId, targetNodeId, isPath1: true, ct);
+
+    public Task<SetPathOutcome> SetPath2Async(int sourceId, int? targetNodeId, CancellationToken ct = default)
+        => SetPathAsync(sourceId, targetNodeId, isPath1: false, ct);
+
+    private async Task<SetPathOutcome> SetPathAsync(
+        int sourceId, int? targetNodeId, bool isPath1, CancellationToken ct)
+    {
+        // Reject self-loops up front — cheap, no SQL needed.
+        if (targetNodeId is int tid && tid == sourceId)
+        {
+            return SetPathOutcome.RejectedSelfLoop;
+        }
+
+        using var connection = await _connectionFactory.CreateOpenConnectionAsync(ct);
+        using var transaction = connection.BeginTransaction();
+
+        try
+        {
+            // Lock + read the source row's shape (node type, workflow id,
+            // its level, and the Draft state of the parent version) in one
+            // shot. UPDLOCK serialises concurrent SetPath calls on the same
+            // source node.
+            var source = await connection.QuerySingleOrDefaultAsync<SourceProbe>(
+                new CommandDefinition(
+                    @"SELECT n.node_type_id          AS NodeTypeId,
+                             n.workflow_definition_id AS WorkflowDefinitionId,
+                             n.execution_level       AS ExecutionLevel,
+                             ver.request_state       AS RequestStateCode
+                      FROM dbo.workflow_nodes n WITH (UPDLOCK, ROWLOCK)
+                      INNER JOIN dbo.workflow_definitions wd ON wd.id = n.workflow_definition_id
+                      INNER JOIN dbo.request_type_versions ver ON ver.id = wd.request_type_version_id
+                      WHERE n.id = @sourceId;",
+                    new { sourceId },
+                    transaction,
+                    cancellationToken: ct));
+
+            if (source is null)
+            {
+                transaction.Rollback();
+                return SetPathOutcome.NotFound;
+            }
+            if (source.RequestStateCode != RequestStateCodes.Draft)
+            {
+                transaction.Rollback();
+                return SetPathOutcome.RejectedNotDraft;
+            }
+
+            // Shape check: which path slots does this node type allow?
+            //   - Start (1), Process (2): only path1
+            //   - Decision (3): both
+            //   - Approved/Rejected/Cancelled (4/5/6): neither
+            var shapeAllows = (source.NodeTypeId, isPath1) switch
+            {
+                (WorkflowNodeTypeIds.Start, true) => true,
+                (WorkflowNodeTypeIds.Process, true) => true,
+                (WorkflowNodeTypeIds.Decision, _) => true,  // either path
+                _ => false,
+            };
+            if (!shapeAllows)
+            {
+                transaction.Rollback();
+                return SetPathOutcome.RejectedShape;
+            }
+
+            // If clearing the edge (targetNodeId = null), the path FK becomes
+            // NULL and there's no renumbering to do — the (now-orphaned)
+            // downstream subtree keeps its current levels.
+            if (targetNodeId is null)
+            {
+                var clearSql = isPath1
+                    ? "UPDATE dbo.workflow_nodes SET path1_node_id = NULL WHERE id = @sourceId;"
+                    : "UPDATE dbo.workflow_nodes SET path2_node_id = NULL WHERE id = @sourceId;";
+                await connection.ExecuteAsync(
+                    new CommandDefinition(clearSql, new { sourceId }, transaction, cancellationToken: ct));
+                transaction.Commit();
+                return SetPathOutcome.Updated;
+            }
+
+            // Setting a non-null target. Probe the target.
+            var target = await connection.QuerySingleOrDefaultAsync<TargetProbe>(
+                new CommandDefinition(
+                    @"SELECT workflow_definition_id AS WorkflowDefinitionId
+                      FROM dbo.workflow_nodes WITH (UPDLOCK, ROWLOCK)
+                      WHERE id = @targetId;",
+                    new { targetId = targetNodeId.Value },
+                    transaction,
+                    cancellationToken: ct));
+
+            if (target is null)
+            {
+                transaction.Rollback();
+                return SetPathOutcome.RejectedTargetNotFound;
+            }
+            if (target.WorkflowDefinitionId != source.WorkflowDefinitionId)
+            {
+                transaction.Rollback();
+                return SetPathOutcome.RejectedTargetNotInWorkflow;
+            }
+
+            // No-merging rule: the target must not already have an incoming
+            // edge from anywhere in this workflow. Includes the source
+            // itself (if we're re-pointing the same edge to the same target,
+            // we'd otherwise spuriously reject). We allow the no-op case:
+            // if source's path1/path2 is already this target, we treat it
+            // as success.
+            //
+            // Two checks:
+            //   1. Is this source's relevant path slot already pointing at
+            //      this target? Then no-op.
+            //   2. Otherwise, does ANY other source have a path FK pointing
+            //      at this target? Then RejectedTargetAlreadyHasParent.
+            var alreadyParentInfo = await connection.QuerySingleOrDefaultAsync<ParentCheck>(
+                new CommandDefinition(
+                    @"SELECT
+                        SUM(CASE WHEN id = @sourceId
+                                  AND ((@isPath1 = 1 AND path1_node_id = @targetId)
+                                    OR (@isPath1 = 0 AND path2_node_id = @targetId))
+                             THEN 1 ELSE 0 END) AS SourceAlreadyPoints,
+                        SUM(CASE WHEN (id <> @sourceId
+                                  AND (path1_node_id = @targetId OR path2_node_id = @targetId))
+                                  OR (id = @sourceId
+                                  AND ((@isPath1 = 1 AND path2_node_id = @targetId)
+                                    OR (@isPath1 = 0 AND path1_node_id = @targetId)))
+                             THEN 1 ELSE 0 END) AS OtherParentCount
+                      FROM dbo.workflow_nodes
+                      WHERE workflow_definition_id = @workflowId;",
+                    new
+                    {
+                        sourceId,
+                        targetId = targetNodeId.Value,
+                        isPath1 = isPath1 ? 1 : 0,
+                        workflowId = source.WorkflowDefinitionId,
+                    },
+                    transaction,
+                    cancellationToken: ct));
+
+            if (alreadyParentInfo is not null && alreadyParentInfo.SourceAlreadyPoints > 0)
+            {
+                // No-op: source's relevant slot already points at target.
+                // We still renumber the target's subtree to be defensive
+                // about any drift in the data — cheap insurance.
+                await RenumberSubtreeAsync(
+                    connection, transaction, targetNodeId.Value, source.ExecutionLevel + 1, ct);
+                transaction.Commit();
+                return SetPathOutcome.Updated;
+            }
+            if (alreadyParentInfo is not null && alreadyParentInfo.OtherParentCount > 0)
+            {
+                transaction.Rollback();
+                return SetPathOutcome.RejectedTargetAlreadyHasParent;
+            }
+
+            // All checks passed. Set the FK and renumber the target's subtree.
+            var setSql = isPath1
+                ? "UPDATE dbo.workflow_nodes SET path1_node_id = @targetId WHERE id = @sourceId;"
+                : "UPDATE dbo.workflow_nodes SET path2_node_id = @targetId WHERE id = @sourceId;";
+            await connection.ExecuteAsync(new CommandDefinition(
+                setSql,
+                new { sourceId, targetId = targetNodeId.Value },
+                transaction,
+                cancellationToken: ct));
+
+            await RenumberSubtreeAsync(
+                connection, transaction, targetNodeId.Value, source.ExecutionLevel + 1, ct);
+
+            transaction.Commit();
+            return SetPathOutcome.Updated;
+        }
+        catch
+        {
+            transaction.Rollback();
+            throw;
+        }
+    }
+
+    public async Task<DeleteNodeResult> DeleteAsync(int id, CancellationToken ct = default)
+    {
+        // Three-statement transactional delete:
+        //   1. Null the workflow's start_node_id if it points at us.
+        //   2. Null any path1/path2 in the same workflow pointing at us.
+        //   3. Delete this node.
+        // Draft-gated up front via UPDLOCK + state read on the node row.
+        //
+        // No renumbering — the (now-orphaned) downstream subtree retains
+        // its current execution_level values. They'll be reset when the
+        // subtree is re-wired into the graph from a new parent.
+        using var connection = await _connectionFactory.CreateOpenConnectionAsync(ct);
+        using var transaction = connection.BeginTransaction();
+
+        try
+        {
+            var probe = await connection.QuerySingleOrDefaultAsync<NodeStateProbe>(
+                new CommandDefinition(
+                    @"SELECT n.workflow_definition_id AS WorkflowDefinitionId,
+                             ver.request_state         AS RequestStateCode
+                      FROM dbo.workflow_nodes n WITH (UPDLOCK, ROWLOCK)
+                      INNER JOIN dbo.workflow_definitions wd ON wd.id = n.workflow_definition_id
+                      INNER JOIN dbo.request_type_versions ver ON ver.id = wd.request_type_version_id
+                      WHERE n.id = @id;",
+                    new { id },
+                    transaction,
+                    cancellationToken: ct));
+
+            if (probe is null)
+            {
+                transaction.Rollback();
+                return DeleteNodeResult.NotFound;
+            }
+            if (probe.RequestStateCode != RequestStateCodes.Draft)
+            {
+                transaction.Rollback();
+                return DeleteNodeResult.RejectedNotDraft;
+            }
+
+            // 1. Null workflow_definitions.start_node_id if it points at us.
+            await connection.ExecuteAsync(new CommandDefinition(
+                @"UPDATE dbo.workflow_definitions
+                  SET start_node_id = NULL
+                  WHERE id = @workflowId AND start_node_id = @id;",
+                new { workflowId = probe.WorkflowDefinitionId, id },
+                transaction,
+                cancellationToken: ct));
+
+            // 2. Null path FKs of upstream parents in the same workflow.
+            await connection.ExecuteAsync(new CommandDefinition(
+                @"UPDATE dbo.workflow_nodes
+                  SET path1_node_id = CASE WHEN path1_node_id = @id THEN NULL ELSE path1_node_id END,
+                      path2_node_id = CASE WHEN path2_node_id = @id THEN NULL ELSE path2_node_id END
+                  WHERE workflow_definition_id = @workflowId
+                    AND (path1_node_id = @id OR path2_node_id = @id);",
+                new { id, workflowId = probe.WorkflowDefinitionId },
+                transaction,
+                cancellationToken: ct));
+
+            // 3. Delete the node.
+            await connection.ExecuteAsync(new CommandDefinition(
+                "DELETE FROM dbo.workflow_nodes WHERE id = @id;",
+                new { id }, transaction, cancellationToken: ct));
+
+            transaction.Commit();
+            return DeleteNodeResult.Deleted;
+        }
+        catch
+        {
+            transaction.Rollback();
+            throw;
+        }
+    }
+
+    public async Task<SetStartNodeOutcome> SetStartNodeAsync(
+        int workflowDefinitionId, int? nodeId, CancellationToken ct = default)
+    {
+        using var connection = await _connectionFactory.CreateOpenConnectionAsync(ct);
+        using var transaction = connection.BeginTransaction();
+
+        try
+        {
+            // Lock the workflow row + read parent state.
+            var probe = await connection.QuerySingleOrDefaultAsync<string?>(
+                new CommandDefinition(
+                    @"SELECT ver.request_state
+                      FROM dbo.workflow_definitions wd WITH (UPDLOCK, ROWLOCK)
+                      INNER JOIN dbo.request_type_versions ver ON ver.id = wd.request_type_version_id
+                      WHERE wd.id = @workflowDefinitionId;",
+                    new { workflowDefinitionId },
+                    transaction,
+                    cancellationToken: ct));
+
+            if (probe is null)
+            {
+                transaction.Rollback();
+                return SetStartNodeOutcome.RejectedWorkflowNotFound;
+            }
+            if (probe != RequestStateCodes.Draft)
+            {
+                transaction.Rollback();
+                return SetStartNodeOutcome.RejectedNotDraft;
+            }
+
+            // Clearing? Just null the FK and we're done.
+            if (nodeId is null)
+            {
+                await connection.ExecuteAsync(new CommandDefinition(
+                    "UPDATE dbo.workflow_definitions SET start_node_id = NULL WHERE id = @workflowDefinitionId;",
+                    new { workflowDefinitionId }, transaction, cancellationToken: ct));
+                transaction.Commit();
+                return SetStartNodeOutcome.Updated;
+            }
+
+            // Validate the node: exists, in this workflow, is Start type.
+            var nodeShape = await connection.QuerySingleOrDefaultAsync<NodeShapeProbe>(
+                new CommandDefinition(
+                    @"SELECT workflow_definition_id AS WorkflowDefinitionId,
+                             node_type_id            AS NodeTypeId
+                      FROM dbo.workflow_nodes
+                      WHERE id = @nodeId;",
+                    new { nodeId = nodeId.Value },
+                    transaction,
+                    cancellationToken: ct));
+
+            if (nodeShape is null)
+            {
+                transaction.Rollback();
+                return SetStartNodeOutcome.RejectedNodeNotFound;
+            }
+            if (nodeShape.WorkflowDefinitionId != workflowDefinitionId)
+            {
+                transaction.Rollback();
+                return SetStartNodeOutcome.RejectedNodeNotInWorkflow;
+            }
+            if (nodeShape.NodeTypeId != WorkflowNodeTypeIds.Start)
+            {
+                transaction.Rollback();
+                return SetStartNodeOutcome.RejectedNotStartNode;
+            }
+
+            // Set the FK and renumber from the start node at level 1.
+            await connection.ExecuteAsync(new CommandDefinition(
+                "UPDATE dbo.workflow_definitions SET start_node_id = @nodeId WHERE id = @workflowDefinitionId;",
+                new { workflowDefinitionId, nodeId = nodeId.Value },
+                transaction, cancellationToken: ct));
+
+            await RenumberSubtreeAsync(connection, transaction, nodeId.Value, 1, ct);
+
+            transaction.Commit();
+            return SetStartNodeOutcome.Updated;
+        }
+        catch
+        {
+            transaction.Rollback();
+            throw;
+        }
+    }
+
+    /// <summary>
+    /// Renumber the subtree rooted at <paramref name="rootNodeId"/>:
+    /// root gets level <paramref name="rootLevel"/>, its path1/path2
+    /// children get level rootLevel + 1, and so on transitively.
+    /// </summary>
+    /// <remarks>
+    /// Uses a recursive CTE to walk the tree in one SQL statement.
+    /// SQL Server's default MAXRECURSION is 100; workflow graphs deeper
+    /// than that aren't a realistic concern for v1 (a recursive CTE that
+    /// hits the limit throws an error rather than silently truncating,
+    /// which is the right failure mode if we somehow hit it).
+    ///
+    /// Cycles would cause the CTE to loop until MAXRECURSION; the
+    /// no-merging rule we enforce at SetPath time prevents cycles in
+    /// practice, but if one slipped in (e.g. via raw SQL outside the
+    /// repo) the renumber would error out — which is fine, the data is
+    /// broken and someone needs to look at it.
+    /// </remarks>
+    private static async Task RenumberSubtreeAsync(
+        IDbConnection connection,
+        IDbTransaction transaction,
+        int rootNodeId,
+        int rootLevel,
+        CancellationToken ct)
+    {
+        const string sql = @"
+            ;WITH descendants AS (
+                SELECT id, CAST(@rootLevel AS int) AS new_level,
+                       path1_node_id, path2_node_id
+                FROM dbo.workflow_nodes
+                WHERE id = @rootNodeId
+
+                UNION ALL
+
+                SELECT child.id, parent.new_level + 1,
+                       child.path1_node_id, child.path2_node_id
+                FROM dbo.workflow_nodes child
+                INNER JOIN descendants parent
+                    ON child.id = parent.path1_node_id
+                    OR child.id = parent.path2_node_id
+            )
+            UPDATE n
+            SET n.execution_level = d.new_level
+            FROM dbo.workflow_nodes n
+            INNER JOIN descendants d ON d.id = n.id;";
+
+        await connection.ExecuteAsync(new CommandDefinition(
+            sql,
+            new { rootNodeId, rootLevel },
+            transaction,
+            cancellationToken: ct));
+    }
+
+    // ---- private projection holders for shape probes -------------------
+
+    private sealed class SourceProbe
+    {
+        public int NodeTypeId { get; init; }
+        public int WorkflowDefinitionId { get; init; }
+        public int ExecutionLevel { get; init; }
+        public string RequestStateCode { get; init; } = string.Empty;
+    }
+
+    private sealed class TargetProbe
+    {
+        public int WorkflowDefinitionId { get; init; }
+    }
+
+    private sealed class ParentCheck
+    {
+        public int SourceAlreadyPoints { get; init; }
+        public int OtherParentCount { get; init; }
+    }
+
+    private sealed class NodeStateProbe
+    {
+        public int WorkflowDefinitionId { get; init; }
+        public string RequestStateCode { get; init; } = string.Empty;
+    }
+
+    private sealed class NodeShapeProbe
+    {
+        public int WorkflowDefinitionId { get; init; }
+        public int NodeTypeId { get; init; }
+    }
+}
