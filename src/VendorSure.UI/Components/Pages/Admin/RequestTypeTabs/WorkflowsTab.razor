@@ -201,7 +201,13 @@ else
                         "Workflow created (id={Id}, name='{Name}') on version id={VersionId}.",
                         result.Id, edited.Name, VersionId);
                     Snackbar.Add($"Created '{edited.Name}'.", Severity.Success);
-                    await LoadAsync();
+                    // Jump straight into the designer for the new workflow.
+                    // The user just created it specifically to design it;
+                    // returning to the Workflows tab makes them click again.
+                    // The snackbar will surface on the designer page after
+                    // navigation completes.
+                    Navigation.NavigateTo(
+                        $"/admin/request-types/{TypeId}/workflows/{result.Id}/designer");
                     break;
                 case CreateWorkflowOutcome.RejectedVersionNotFound:
                     Snackbar.Add("Cannot create: version no longer exists.", Severity.Error);
