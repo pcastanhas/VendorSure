@@ -333,20 +333,20 @@ export async function mount(selector, graphData, dotNetRef) {
 
     // X (delete) buttons. One per node, except Start. Only rendered when
     // the workflow is editable (entry.dotNetRef is truthy).
-    // Position: top-left corner of the node body. Diamonds get an inset
-    // adjustment so the X doesn't float outside the visible fill area.
+    // Position: top middle of the node body. The X button's center sits
+    // on the top edge of the shape's bounding box (y = -NODE_H/2), so
+    // about half the button straddles the body and half floats above.
+    // This works for rectangles, ovals, AND diamonds (whose topmost
+    // vertex is also at that point). Keeps the X clear of the centered
+    // node-name label and any block-decision labels that hug the top.
     if (entry.dotNetRef) {
         const deletableNodes = positioned.filter(
             (n) => n.nodeTypeId !== NODE_TYPE.Start);
-        const xPositions = deletableNodes.map((n) => {
-            // Diamond: inset further so the X sits over the diamond's
-            // upper-left slope, not outside the shape. Use NODE_W/4
-            // and NODE_H/4 for a comfortable position.
-            const isDiamond = n.nodeTypeId === NODE_TYPE.Decision;
-            const dx = isDiamond ? -NODE_W / 4 : -NODE_W / 2 + 12;
-            const dy = isDiamond ? -NODE_H / 4 : -NODE_H / 2 + 12;
-            return { nodeId: n.id, x: n.x + dx, y: n.y + dy };
-        });
+        const xPositions = deletableNodes.map((n) => ({
+            nodeId: n.id,
+            x: n.x,
+            y: n.y - NODE_H / 2,
+        }));
 
         const xG = svg.append("g").attr("class", "delete-buttons");
         xG.selectAll("g")
