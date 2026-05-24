@@ -146,21 +146,39 @@ GO
     name is the short label shown to workflow authors in the picker
     dialog and rendered as the label on each node on the canvas.
     description is the longer prose shown as a secondary line in the
-    picker and as a native hover tooltip on the node body. */
+    picker and as a native hover tooltip on the node body.
+
+    path1_decision and path2_decision are the labels shown on the
+    canvas at the Decision diamond's left and right outgoing vertices
+    respectively — e.g., "True"/"False", "Approved"/"Denied",
+    "Clean"/"Flagged". These belong to the block, not the node: the
+    block's code precodes the path semantics, so the labels are
+    consistent everywhere the block is used. Populated for Decision
+    blocks (node_type_id = 3), forbidden for Process blocks. */
 CREATE TABLE [dbo].[block_catalog] (
-    [id]            int             IDENTITY(1,1) NOT NULL,
-    [node_type_id]  int             NOT NULL,
-    [name]          nvarchar(50)    NOT NULL,
-    [description]   nvarchar(200)   NOT NULL,
-    [class_name]    nvarchar(200)   NOT NULL,   -- the .NET class implementing the block
-    [is_active]     bit             NOT NULL CONSTRAINT [DF_block_catalog_is_active] DEFAULT (1),
-    [color]         char(7)         NULL,
+    [id]              int             IDENTITY(1,1) NOT NULL,
+    [node_type_id]    int             NOT NULL,
+    [name]            nvarchar(50)    NOT NULL,
+    [description]     nvarchar(200)   NOT NULL,
+    [class_name]      nvarchar(200)   NOT NULL,   -- the .NET class implementing the block
+    [is_active]       bit             NOT NULL CONSTRAINT [DF_block_catalog_is_active] DEFAULT (1),
+    [color]           char(7)         NULL,
+    [path1_decision]  nvarchar(20)    NULL,
+    [path2_decision]  nvarchar(20)    NULL,
     CONSTRAINT [PK_block_catalog] PRIMARY KEY CLUSTERED ([id] ASC),
     CONSTRAINT [CK_block_catalog_color]
         CHECK ([color] IS NULL OR [color] LIKE '#[0-9A-Fa-f][0-9A-Fa-f][0-9A-Fa-f][0-9A-Fa-f][0-9A-Fa-f][0-9A-Fa-f]'),
     -- blocks only exist for Process (2) and Decision (3)
     CONSTRAINT [CK_block_catalog_node_type]
-        CHECK ([node_type_id] IN (2,3))
+        CHECK ([node_type_id] IN (2,3)),
+    -- Decision blocks (3) require both path labels; Process blocks (2)
+    -- must leave them NULL.
+    CONSTRAINT [CK_block_catalog_decision_labels]
+        CHECK (
+            ([node_type_id] = 3 AND [path1_decision] IS NOT NULL AND [path2_decision] IS NOT NULL)
+            OR
+            ([node_type_id] = 2 AND [path1_decision] IS NULL AND [path2_decision] IS NULL)
+        )
 );
 GO
 
@@ -330,9 +348,11 @@ GO
     (4,5,6); NOT NULL for Process (2) and Decision (3). Enforced by CHECK
     (simple hardcoded IDs, per your call).
 
-    prompt_text / path*_prompt_text: textual hints displayed on the canvas
-    and in the reviewer surface ("Is this vendor foreign?" on the decision,
-    "Yes" / "No" on its outgoing edges). */
+    prompt_text: human-actor-facing question displayed on the reviewer
+    surface when a Decision block routes through a human ("Is this
+    vendor foreign?"). Path labels for Decision branches live on
+    block_catalog.path1_decision / path2_decision — they're block-
+    level semantics, not workflow-author choices. */
 CREATE TABLE [dbo].[workflow_nodes] (
     [id]                        int             IDENTITY(1,1) NOT NULL,
     [workflow_definition_id]    int             NOT NULL,
@@ -346,8 +366,6 @@ CREATE TABLE [dbo].[workflow_nodes] (
     [path1_node_id]             int             NULL,
     [path2_node_id]             int             NULL,
     [prompt_text]               nvarchar(200)   NULL,
-    [path1_prompt_text]         nvarchar(50)    NULL,
-    [path2_prompt_text]         nvarchar(50)    NULL,
     CONSTRAINT [PK_workflow_nodes] PRIMARY KEY CLUSTERED ([id] ASC),
     -- Block presence matches node type: Process(2)/Decision(3) require a block; Start(1)/Terminals(4,5,6) forbid one.
     CONSTRAINT [CK_workflow_nodes_block_by_type]

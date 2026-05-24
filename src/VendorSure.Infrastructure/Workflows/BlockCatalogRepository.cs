@@ -14,7 +14,9 @@ internal sealed class BlockCatalogRepository : IBlockCatalogRepository
         description     AS Description,
         class_name      AS ClassName,
         is_active       AS IsActive,
-        color           AS Color";
+        color           AS Color,
+        path1_decision  AS Path1Decision,
+        path2_decision  AS Path2Decision";
 
     private readonly IDbConnectionFactory _connectionFactory;
 

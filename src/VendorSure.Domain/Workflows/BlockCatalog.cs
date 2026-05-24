@@ -62,4 +62,22 @@ public sealed class BlockCatalog
     /// the node-type default fill. Null means "use the node-type default."
     /// </summary>
     public string? Color { get; init; }
+
+    /// <summary>
+    /// Label shown on the canvas at the Decision diamond's left
+    /// (path1) outgoing vertex. Block-level semantics: "True",
+    /// "Approved", "Clean", etc. — whatever the block's code emits
+    /// for path1. Always populated for Decision blocks; always NULL
+    /// for Process blocks. Enforced by
+    /// <c>CK_block_catalog_decision_labels</c>.
+    /// </summary>
+    public string? Path1Decision { get; init; }
+
+    /// <summary>
+    /// Label shown on the canvas at the Decision diamond's right
+    /// (path2) outgoing vertex. Same shape as
+    /// <see cref="Path1Decision"/>; populated only for Decision
+    /// blocks.
+    /// </summary>
+    public string? Path2Decision { get; init; }
 }

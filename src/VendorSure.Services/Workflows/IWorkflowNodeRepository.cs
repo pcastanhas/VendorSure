@@ -234,10 +234,11 @@ public interface IWorkflowNodeRepository
 
     /// <summary>
     /// Updates the editable property fields on a node: prompt_text,
-    /// path1_prompt_text, path2_prompt_text, approver_group_id,
-    /// stale_threshold_days, stale_message_text, notes.
-    /// Does NOT touch node_type, block_catalog_id, workflow,
-    /// execution_level, or path FKs.
+    /// approver_group_id, stale_threshold_days, stale_message_text,
+    /// notes. Does NOT touch node_type, block_catalog_id, workflow,
+    /// execution_level, or path FKs. Per-branch labels are not on the
+    /// node — they live on <c>block_catalog.path1_decision</c> and
+    /// <c>path2_decision</c> since they're block-level semantics.
     /// </summary>
     Task<UpdateNodeResult> UpdateAsync(WorkflowNode edited, CancellationToken ct = default);
 

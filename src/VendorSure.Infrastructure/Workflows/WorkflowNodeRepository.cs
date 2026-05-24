@@ -21,9 +21,7 @@ internal sealed class WorkflowNodeRepository : IWorkflowNodeRepository
         notes                       AS Notes,
         path1_node_id               AS Path1NodeId,
         path2_node_id               AS Path2NodeId,
-        prompt_text                 AS PromptText,
-        path1_prompt_text           AS Path1PromptText,
-        path2_prompt_text           AS Path2PromptText";
+        prompt_text                 AS PromptText";
 
     private readonly IDbConnectionFactory _connectionFactory;
 
@@ -81,13 +79,13 @@ internal sealed class WorkflowNodeRepository : IWorkflowNodeRepository
                  execution_level,
                  approver_group_id, stale_threshold_days, stale_message_text, notes,
                  path1_node_id, path2_node_id,
-                 prompt_text, path1_prompt_text, path2_prompt_text)
+                 prompt_text)
             SELECT
                 @WorkflowDefinitionId, @NodeTypeId, @BlockCatalogId,
                 0,
                 @ApproverGroupId, @StaleThresholdDays, @StaleMessageText, @Notes,
                 NULL, NULL,
-                @PromptText, @Path1PromptText, @Path2PromptText
+                @PromptText
             WHERE EXISTS (
                 SELECT 1
                 FROM dbo.workflow_definitions wd
@@ -112,8 +110,6 @@ internal sealed class WorkflowNodeRepository : IWorkflowNodeRepository
                     seed.StaleMessageText,
                     seed.Notes,
                     seed.PromptText,
-                    seed.Path1PromptText,
-                    seed.Path2PromptText,
                     DraftCode = RequestStateCodes.Draft,
                 },
                 cancellationToken: ct));
@@ -370,9 +366,7 @@ internal sealed class WorkflowNodeRepository : IWorkflowNodeRepository
                 n.stale_threshold_days = @StaleThresholdDays,
                 n.stale_message_text   = @StaleMessageText,
                 n.notes                = @Notes,
-                n.prompt_text          = @PromptText,
-                n.path1_prompt_text    = @Path1PromptText,
-                n.path2_prompt_text    = @Path2PromptText
+                n.prompt_text          = @PromptText
             FROM dbo.workflow_nodes n
             INNER JOIN dbo.workflow_definitions wd ON wd.id = n.workflow_definition_id
             INNER JOIN dbo.request_type_versions ver ON ver.id = wd.request_type_version_id
@@ -391,8 +385,6 @@ internal sealed class WorkflowNodeRepository : IWorkflowNodeRepository
                     edited.StaleMessageText,
                     edited.Notes,
                     edited.PromptText,
-                    edited.Path1PromptText,
-                    edited.Path2PromptText,
                     DraftCode = RequestStateCodes.Draft,
                 },
                 cancellationToken: ct));

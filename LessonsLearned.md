@@ -1133,3 +1133,50 @@ care about the new data anyway. Then the static-properties
 window-dressing is just delaying the readability cost. Bite the
 bullet and migrate.
 
+
+## 2026-05-24 — Don't bake positive/negative judgment into a neutral UI element's colors
+
+Phase 5 cleanup. Adding path-decision labels to Decision diamonds
+on the canvas, user proposed "always red on the left, always
+green on the right." Quick, predictable, simple.
+
+I pushed back before agreeing. The proposal would encode
+"left = bad / negative" and "right = good / positive" as a UI
+convention. Works for some blocks ("Vendor Name Exists" → left
+False = bad = red, right True = good = green). Breaks for:
+
+  - "Requires Manager Approval" (left Yes = needs approval; not
+    "bad," just a different routing path).
+  - "Vendor Risk Tier" (left Low / right High — Low isn't red).
+  - "Approve Onboarding" wired as left Approve / right Deny — now
+    the colors are inverted from semantics, and a reader skims
+    the color and misreads the workflow.
+
+The reader absorbs the color cue subconsciously: green = "happy
+path." Any block author whose happy path is path1 gets
+miscommunicated by the UI. The fix isn't "be more careful when
+authoring blocks" — it's "don't put the cue in the UI in the
+first place."
+
+We landed on neutral muted gray for both labels. The text itself
+carries the information: "Rejected" / "Approved" / "Insufficient"
+/ "Acceptable" — those words convey the judgment. Colors stay
+out of it.
+
+**The general rule**: when a UI element is going to be reused
+across many semantically distinct contexts, the visual treatment
+should be neutral. Color coding works when the element's meaning
+is fixed (terminals: Approved is green, Rejected is red — those
+labels are universal in this app). It doesn't work when the
+element is a slot whose meaning varies per-block.
+
+The terminal nodes ARE color-coded (green/red/gray) because
+"approved" is universally good, "rejected" is universally not,
+"cancelled" is universally neutral. The Decision branch labels
+don't have universal meaning — they're block-specific — so they
+stay neutral.
+
+A small architectural corollary: if you ever feel like adding a
+"happy_path" or "negative_branch" column to encode the judgment,
+that's a sign the model needs splitting (block_catalog gains a
+new field) not patching (UI guesses). For now, we don't need it.

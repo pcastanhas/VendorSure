@@ -157,6 +157,50 @@ export async function mount(selector, graphData, dotNetRef) {
         .attr("stroke", "#9e9e9e")
         .attr("stroke-width", 1.5);
 
+    // Path-decision labels on Decision outgoing edges. The label sits
+    // along the horizontal segment leaving the diamond's left/right
+    // vertex — that's where the eye looks to learn "this branch means
+    // <label>". Block-level: lifted from block_catalog.path1_decision /
+    // path2_decision via the payload's path1Decision / path2Decision
+    // per-node fields, populated only for nodes whose block has them
+    // (i.e. Decision blocks). Per the design call, both labels render
+    // in the same muted color — predictable and never misleading.
+    const decisionLabels = drawableEdges
+        .filter((e) => e.source.nodeTypeId === NODE_TYPE.Decision)
+        .map((e) => {
+            const label = e.kind === "path1"
+                ? e.source.path1Decision
+                : e.source.path2Decision;
+            if (!label) return null;
+            // Position: midpoint of the horizontal segment between the
+            // diamond's vertex (parent.x ± NODE_W/2 at parent.y) and
+            // the turn point (child.x at parent.y). Y is parent.y;
+            // shift up 4px so text sits ABOVE the line, not on it.
+            const vertexX = e.kind === "path1"
+                ? e.source.x - NODE_W / 2
+                : e.source.x + NODE_W / 2;
+            const turnX = e.target.x;
+            return {
+                text: label,
+                x: (vertexX + turnX) / 2,
+                y: e.source.y - 4,
+            };
+        })
+        .filter((d) => d !== null);
+
+    svg.append("g")
+        .attr("class", "decision-labels-real")
+        .selectAll("text")
+        .data(decisionLabels)
+        .enter()
+        .append("text")
+        .attr("x", (d) => d.x)
+        .attr("y", (d) => d.y)
+        .attr("text-anchor", "middle")
+        .attr("font-size", "10px")
+        .attr("fill", "#616161")  // Material grey 700 — neutral, readable
+        .text((d) => d.text);
+
     // Dangling edges for empty slots. Same routing as real edges but
     // terminate at the + button instead of a child node, and rendered
     // dashed to read as "tentative / unresolved".
@@ -173,29 +217,47 @@ export async function mount(selector, graphData, dotNetRef) {
         .attr("stroke-width", 1.5)
         .attr("stroke-dasharray", "4 3");
 
-    // Decision branch labels, rendered INSIDE the diamond near each
-    // vertex. Same labels appear regardless of whether the slot is
-    // filled or dangling — the label belongs to the slot, not the edge.
-    const decisionNodes = positioned.filter(
-        (n) => n.nodeTypeId === NODE_TYPE.Decision);
-    const decisionLabels = [];
-    for (const d of decisionNodes) {
-        decisionLabels.push({ x: d.x - NODE_W / 2 + 10, y: d.y - 4, text: "1" });
-        decisionLabels.push({ x: d.x + NODE_W / 2 - 10, y: d.y - 4, text: "2" });
-    }
+    // Path-decision labels on DANGLING Decision edges. Mirrors the
+    // labels on real edges above — same position scheme, same color —
+    // so the author can see what each empty slot represents before
+    // wiring it. The label belongs to the slot, not the edge: empty
+    // slots still know which path they are.
+    const danglingDecisionLabels = danglingButtons
+        .map((b) => {
+            const parent = positionedById.get(b.parentId);
+            if (!parent || parent.nodeTypeId !== NODE_TYPE.Decision) return null;
+            const label = b.slot === 1
+                ? parent.path1Decision
+                : parent.path2Decision;
+            if (!label) return null;
+            const vertexX = b.slot === 1
+                ? parent.x - NODE_W / 2
+                : parent.x + NODE_W / 2;
+            return {
+                text: label,
+                x: (vertexX + b.x) / 2,
+                y: parent.y - 4,
+            };
+        })
+        .filter((d) => d !== null);
+
     svg.append("g")
-        .attr("class", "decision-labels")
+        .attr("class", "decision-labels-dangling")
         .selectAll("text")
-        .data(decisionLabels)
+        .data(danglingDecisionLabels)
         .enter()
         .append("text")
         .attr("x", (d) => d.x)
         .attr("y", (d) => d.y)
         .attr("text-anchor", "middle")
-        .attr("font-size", "9px")
-        .attr("font-weight", "600")
-        .attr("fill", "#5d4037")
+        .attr("font-size", "10px")
+        .attr("fill", "#757575")  // Material grey 600 — a step darker than the dashed edge (#bdbdbd) so the label reads against it
         .text((d) => d.text);
+
+    // (The numeric "1" / "2" slot labels that used to render inside
+    // each diamond were dropped — the path-decision labels rendered
+    // above on the horizontal edge segments carry the same semantic
+    // role with the actual block-defined values.)
 
     // Nodes.
     const nodeG = svg.append("g")

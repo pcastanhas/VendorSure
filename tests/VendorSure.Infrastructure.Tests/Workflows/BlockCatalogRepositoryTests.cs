@@ -44,7 +44,8 @@ public sealed class BlockCatalogRepositoryTests
 
             var decisionId = await InsertBlockAsync(
                 nodeTypeId: 3, name: $"{prefix}_dec_n", description: $"{prefix}_dec",
-                className: "VendorSure.Test.DecBlock", isActive: true, color: null);
+                className: "VendorSure.Test.DecBlock", isActive: true, color: null,
+                path1Decision: "True", path2Decision: "False");
             insertedIds.Add(decisionId);
 
             var all = await _catalog.ListActiveAsync();
@@ -58,6 +59,10 @@ public sealed class BlockCatalogRepositoryTests
             Assert.Equal("VendorSure.Test.ProcBlock", proc.ClassName);
             Assert.True(proc.IsActive);
             Assert.Equal("#abcdef", proc.Color);
+            // Process blocks must have NULL path decisions per
+            // CK_block_catalog_decision_labels.
+            Assert.Null(proc.Path1Decision);
+            Assert.Null(proc.Path2Decision);
 
             var dec = mine.Single(b => b.Id == decisionId);
             Assert.Equal(3, dec.NodeTypeId);
@@ -66,6 +71,9 @@ public sealed class BlockCatalogRepositoryTests
             Assert.Equal("VendorSure.Test.DecBlock", dec.ClassName);
             Assert.True(dec.IsActive);
             Assert.Null(dec.Color);
+            // Decision blocks must have both path decisions populated.
+            Assert.Equal("True", dec.Path1Decision);
+            Assert.Equal("False", dec.Path2Decision);
         }
         finally
         {
@@ -119,7 +127,7 @@ public sealed class BlockCatalogRepositoryTests
             insertedIds.Add(procZ);
 
             var decG = await InsertBlockAsync(
-                3, $"{prefix}_dec_gamma", "desc g", "X", true, null);
+                3, $"{prefix}_dec_gamma", "desc g", "X", true, null, "T", "F");
             insertedIds.Add(decG);
 
             var procA = await InsertBlockAsync(
@@ -127,7 +135,7 @@ public sealed class BlockCatalogRepositoryTests
             insertedIds.Add(procA);
 
             var decB = await InsertBlockAsync(
-                3, $"{prefix}_dec_beta", "desc b", "X", true, null);
+                3, $"{prefix}_dec_beta", "desc b", "X", true, null, "T", "F");
             insertedIds.Add(decB);
 
             var all = await _catalog.ListActiveAsync();
@@ -159,15 +167,18 @@ public sealed class BlockCatalogRepositoryTests
     // --- helpers ---------------------------------------------------------
 
     private async Task<int> InsertBlockAsync(
-        int nodeTypeId, string name, string description, string className, bool isActive, string? color)
+        int nodeTypeId, string name, string description, string className, bool isActive, string? color,
+        string? path1Decision = null, string? path2Decision = null)
     {
         using var connection = await _connectionFactory.CreateOpenConnectionAsync();
         return await connection.QuerySingleAsync<int>(@"
             INSERT INTO dbo.block_catalog
-                (node_type_id, name, description, class_name, is_active, color)
-            VALUES (@nodeTypeId, @name, @description, @className, @isActive, @color);
+                (node_type_id, name, description, class_name, is_active, color,
+                 path1_decision, path2_decision)
+            VALUES (@nodeTypeId, @name, @description, @className, @isActive, @color,
+                    @path1Decision, @path2Decision);
             SELECT CAST(SCOPE_IDENTITY() AS int);",
-            new { nodeTypeId, name, description, className, isActive, color });
+            new { nodeTypeId, name, description, className, isActive, color, path1Decision, path2Decision });
     }
 
     private async Task CleanupAsync(IEnumerable<int> ids)

@@ -56,14 +56,15 @@ public sealed class WorkflowNode
     /// <summary>Out-edge target (second edge for Decision; null otherwise).</summary>
     public int? Path2NodeId { get; init; }
 
-    /// <summary>The question on a Decision node, e.g. "Is this vendor foreign?".</summary>
+    /// <summary>
+    /// The human-actor-facing question on a Decision node (e.g.
+    /// "Approve this vendor onboarding?"). Only meaningful when the
+    /// block routes through a human; system/AI blocks ignore it. Path
+    /// labels are not on the node — they're on the block catalog row
+    /// (<c>block_catalog.path1_decision</c> / <c>path2_decision</c>)
+    /// because the labels are block-level semantics.
+    /// </summary>
     public string? PromptText { get; init; }
-
-    /// <summary>Label on the path1 out-edge, e.g. "Yes".</summary>
-    public string? Path1PromptText { get; init; }
-
-    /// <summary>Label on the path2 out-edge, e.g. "No".</summary>
-    public string? Path2PromptText { get; init; }
 }
 
 /// <summary>
