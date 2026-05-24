@@ -6,6 +6,14 @@
 // the page passes during mount(). No drag/drop — Chunk 6's palette
 // surface was superseded by the +-button model in Chunk 7.
 //
+// Layout: subtree-width-aware, top-down from each root. Non-Decision
+// parents sit directly above their single child; Decision parents
+// branch left/right and edges route classic-flowchart-style (horizontal
+// out of the left/right vertex, then vertical down to the child).
+// Empty slots get a dashed edge terminating at a + button — the dashed
+// edge is the "missing endpoint" cue. Non-empty slots get a + on the
+// midpoint of the existing edge for "insert here".
+//
 // D3 is loaded as UMD via <script> in App.razor, so window.d3 is the
 // entry point. This module is an ES module that holds onto small per-
 // canvas state across re-mounts.
@@ -29,11 +37,12 @@ const TERMINAL_TYPES = new Set([
 // scrolling. Designer doesn't have zoom/pan yet; if workflows ever grow
 // past ~12 nodes vertically we'll add it.
 const ROW_HEIGHT = 110;          // vertical distance between levels
-const COL_WIDTH = 150;
-const TOP_PADDING = 40;
-const LEFT_PADDING = 40;
 const NODE_W = 110;
 const NODE_H = 50;
+const SUBTREE_GAP = 30;          // horizontal gap between Decision's two subtrees
+const MIN_HALF_WIDTH = 80;       // minimum half-spacing for a Decision's branches
+const TOP_PADDING = 40;
+const LEFT_PADDING = 40;
 const PLUS_RADIUS = 11;          // the + button circle's radius
 
 // Per-node-type appearance. Fill/stroke colors are readable on both
@@ -72,12 +81,9 @@ export async function mount(selector, graphData, dotNetRef) {
         return;
     }
 
-    // Wipe prior contents (the SVG from the previous mount). Listeners
-    // attached to the container itself persist across innerHTML clears,
-    // but we don't attach any container-level listeners in the
-    // +-button model — clicks go through delegated SVG handlers
-    // attached during this mount() call, which get torn down with
-    // the SVG.
+    // Wipe prior contents. Listeners attached to the container persist
+    // across innerHTML clears, but the +-button model attaches listeners
+    // only on the SVG elements (cleared with the SVG).
     container.innerHTML = "";
 
     let entry = state.get(selector);
@@ -95,16 +101,32 @@ export async function mount(selector, graphData, dotNetRef) {
         .map((e) => ({
             source: positionedById.get(e.sourceId),
             target: positionedById.get(e.targetId),
-            kind: e.kind,
+            kind: e.kind, // "path1" | "path2"
         }))
         .filter((e) => e.source && e.target);
 
-    // Size the SVG. Account for + buttons that sit below leaf nodes —
-    // they extend the bottom bound by ~30px past NODE_H/2.
-    const maxX = positioned.reduce((m, n) => Math.max(m, n.x), 0);
-    const maxY = positioned.reduce((m, n) => Math.max(m, n.y), 0);
-    const width = Math.max(600, maxX + NODE_W / 2 + LEFT_PADDING + 40);
-    const height = Math.max(360, maxY + NODE_H / 2 + TOP_PADDING + 60);
+    // Plus buttons: one per open slot on each non-terminal node. Build
+    // before sizing the SVG because the buttons can extend the bottom
+    // bound (empty slots draw the + at child-position-would-be).
+    const plusButtons = entry.dotNetRef
+        ? buildPlusButtons(positioned, positionedById)
+        : [];
+
+    // Bounds. Include + button positions so the canvas grows to fit
+    // empty-slot +s that sit below the lowest node row, and to fit
+    // wide Decision subtrees that push +s out to the right.
+    const allXs = [
+        ...positioned.map((n) => n.x + NODE_W / 2),
+        ...plusButtons.map((b) => b.x + PLUS_RADIUS),
+    ];
+    const allYs = [
+        ...positioned.map((n) => n.y + NODE_H / 2),
+        ...plusButtons.map((b) => b.y + PLUS_RADIUS),
+    ];
+    const maxX = allXs.length ? Math.max(...allXs) : 0;
+    const maxY = allYs.length ? Math.max(...allYs) : 0;
+    const width = Math.max(600, maxX + LEFT_PADDING);
+    const height = Math.max(360, maxY + TOP_PADDING);
 
     const svg = d3.select(container)
         .append("svg")
@@ -113,38 +135,57 @@ export async function mount(selector, graphData, dotNetRef) {
         .attr("viewBox", `0 0 ${width} ${height}`)
         .style("display", "block");
 
-    // Edges first so node shapes paint on top.
-    const linkGen = d3.linkVertical()
-        .x((d) => d.x)
-        .y((d) => d.y);
-
+    // Real edges first so node shapes paint on top.
     svg.append("g")
         .attr("class", "edges")
         .selectAll("path")
         .data(drawableEdges)
         .enter()
         .append("path")
-        .attr("d", (d) => linkGen({
-            source: { x: d.source.x, y: d.source.y + NODE_H / 2 },
-            target: { x: d.target.x, y: d.target.y - NODE_H / 2 },
-        }))
+        .attr("d", (d) => edgePath(d.source, d.target, d.kind))
         .attr("fill", "none")
         .attr("stroke", "#9e9e9e")
         .attr("stroke-width", 1.5);
 
-    // Edge labels for Decision branches.
+    // Dangling edges for empty slots. Same routing as real edges but
+    // terminate at the + button instead of a child node, and rendered
+    // dashed to read as "tentative / unresolved".
+    const danglingButtons = plusButtons.filter((b) => b.slotEmpty);
     svg.append("g")
-        .attr("class", "edge-labels")
+        .attr("class", "dangling-edges")
+        .selectAll("path")
+        .data(danglingButtons)
+        .enter()
+        .append("path")
+        .attr("d", (d) => danglingEdgePath(positionedById.get(d.parentId), d))
+        .attr("fill", "none")
+        .attr("stroke", "#bdbdbd")
+        .attr("stroke-width", 1.5)
+        .attr("stroke-dasharray", "4 3");
+
+    // Decision branch labels, rendered INSIDE the diamond near each
+    // vertex. Same labels appear regardless of whether the slot is
+    // filled or dangling — the label belongs to the slot, not the edge.
+    const decisionNodes = positioned.filter(
+        (n) => n.nodeTypeId === NODE_TYPE.Decision);
+    const decisionLabels = [];
+    for (const d of decisionNodes) {
+        decisionLabels.push({ x: d.x - NODE_W / 2 + 10, y: d.y - 4, text: "1" });
+        decisionLabels.push({ x: d.x + NODE_W / 2 - 10, y: d.y - 4, text: "2" });
+    }
+    svg.append("g")
+        .attr("class", "decision-labels")
         .selectAll("text")
-        .data(drawableEdges.filter((e) => e.source.nodeTypeId === NODE_TYPE.Decision))
+        .data(decisionLabels)
         .enter()
         .append("text")
-        .attr("x", (d) => (d.source.x + d.target.x) / 2 + 8)
-        .attr("y", (d) => (d.source.y + d.target.y) / 2)
-        .attr("text-anchor", "start")
-        .attr("font-size", "10px")
-        .attr("fill", "#616161")
-        .text((d) => d.kind === "path1" ? "1" : "2");
+        .attr("x", (d) => d.x)
+        .attr("y", (d) => d.y)
+        .attr("text-anchor", "middle")
+        .attr("font-size", "9px")
+        .attr("font-weight", "600")
+        .attr("fill", "#5d4037")
+        .text((d) => d.text);
 
     // Nodes.
     const nodeG = svg.append("g")
@@ -176,19 +217,8 @@ export async function mount(selector, graphData, dotNetRef) {
             .text(`#${d.id}`);
     });
 
-    // + buttons. One per open slot for non-terminal nodes:
-    //   - Start/Process: one + button.
-    //   - Decision: two + buttons (slot 1 left, slot 2 right).
-    //   - Terminals: none.
-    // Position depends on whether the slot is empty:
-    //   - empty: below the parent at the spot a future child would sit
-    //     (centered for Start/Process, left/right for Decision).
-    //   - non-empty: on the edge midway between parent and child, so
-    //     "insert between" feels literal.
-    // We only render + buttons when there's a Blazor callback wired up
-    // — read-only views (non-Draft versions) just show the graph.
-    if (entry.dotNetRef) {
-        const plusButtons = buildPlusButtons(positioned, positionedById);
+    // + buttons, drawn last so they paint on top of nodes and edges.
+    if (plusButtons.length > 0) {
         const plusG = svg.append("g").attr("class", "plus-buttons");
         plusG.selectAll("g")
             .data(plusButtons)
@@ -198,7 +228,7 @@ export async function mount(selector, graphData, dotNetRef) {
             .attr("transform", (d) => `translate(${d.x}, ${d.y})`)
             .style("cursor", "pointer")
             .on("click", (event, d) => onPlusClick(event, d, entry.dotNetRef))
-            .each(function (d) {
+            .each(function () {
                 const g = d3.select(this);
                 g.append("circle")
                     .attr("r", PLUS_RADIUS)
@@ -232,48 +262,144 @@ export async function dispose(selector) {
     }
 }
 
-// --- internals -----------------------------------------------------------
+// --- layout --------------------------------------------------------------
 
+// Compute x/y pixel positions for every node. Algorithm:
+//   1. Build a parent → child(ren) map from path1NodeId / path2NodeId.
+//   2. Identify roots: nodes that aren't anyone's child. In a normal
+//      Chunk 7 workflow this is exactly one Start; defensively we walk
+//      every root we find (handles edge cases like orphaned subtrees
+//      from older data).
+//   3. For each root, walk top-down computing subtree widths bottom-up
+//      first, then assigning x positions top-down using those widths.
+//   4. y position is purely from executionLevel (the engine's truth).
+//
+// Subtree width: the horizontal span a node and its descendants occupy.
+//   - Leaf or single-childless non-terminal: NODE_W.
+//   - Non-Decision with one child: max(NODE_W, child's subtree width).
+//   - Decision: leftWidth + rightWidth + SUBTREE_GAP, but at least
+//     2 * MIN_HALF_WIDTH + SUBTREE_GAP so single-node branches still
+//     get visible separation.
+//
+// When a Decision has no children yet (both slots empty), it still
+// reserves space for its eventual branches via the MIN_HALF_WIDTH
+// floor — so the two + buttons don't visually crowd the diamond.
 function layout(nodes) {
     if (nodes.length === 0) return [];
 
-    // Group by execution_level, spread evenly within each level. The
-    // designer-side invariant (Chunk 7) means orphans no longer occur in
-    // normal use, but defensive: any node at level 0 (orphan) sits at the
-    // top with the Start row.
-    const byLevel = new Map();
+    const nodesById = new Map(nodes.map((n) => [n.id, n]));
+    const isChild = new Set();
     for (const n of nodes) {
-        const lvl = n.executionLevel || 1;
-        if (!byLevel.has(lvl)) byLevel.set(lvl, []);
-        byLevel.get(lvl).push(n);
+        if (n.path1NodeId != null) isChild.add(n.path1NodeId);
+        if (n.path2NodeId != null) isChild.add(n.path2NodeId);
+    }
+    const roots = nodes.filter((n) => !isChild.has(n.id));
+
+    // Subtree-width memo. Key: node id. Value: pixel width the subtree
+    // rooted at that node needs.
+    const widths = new Map();
+    function subtreeWidth(node) {
+        if (widths.has(node.id)) return widths.get(node.id);
+        let w;
+        if (node.nodeTypeId === NODE_TYPE.Decision) {
+            const left = node.path1NodeId != null
+                ? subtreeWidth(nodesById.get(node.path1NodeId))
+                : 2 * MIN_HALF_WIDTH;
+            const right = node.path2NodeId != null
+                ? subtreeWidth(nodesById.get(node.path2NodeId))
+                : 2 * MIN_HALF_WIDTH;
+            w = Math.max(NODE_W, left / 2 + right / 2 + SUBTREE_GAP + NODE_W);
+            // The + NODE_W ensures the diamond itself fits even if both
+            // subtrees are narrow.
+        } else if (TERMINAL_TYPES.has(node.nodeTypeId)) {
+            w = NODE_W;
+        } else {
+            // Start, Process: one child via path1 (path2 isn't valid).
+            const child = node.path1NodeId != null
+                ? nodesById.get(node.path1NodeId)
+                : null;
+            w = child ? Math.max(NODE_W, subtreeWidth(child)) : NODE_W;
+        }
+        widths.set(node.id, w);
+        return w;
     }
 
-    const levels = [...byLevel.keys()].sort((a, b) => a - b);
-    const out = [];
-    for (const lvl of levels) {
-        const nodesAtLevel = byLevel.get(lvl);
-        const count = nodesAtLevel.length;
-        for (let i = 0; i < count; i++) {
-            const n = nodesAtLevel[i];
-            out.push({
-                ...n,
-                x: LEFT_PADDING + COL_WIDTH * (i - (count - 1) / 2) + 320,
-                y: TOP_PADDING + (lvl - 1) * ROW_HEIGHT + NODE_H,
-            });
+    // Walk each root, assign positions. centerX = the x coordinate this
+    // subtree should be centered on.
+    const positioned = [];
+    function place(node, centerX) {
+        positioned.push({
+            ...node,
+            x: centerX,
+            y: TOP_PADDING + (node.executionLevel - 1) * ROW_HEIGHT + NODE_H,
+        });
+        if (TERMINAL_TYPES.has(node.nodeTypeId)) return;
+
+        if (node.nodeTypeId === NODE_TYPE.Decision) {
+            // Each subtree gets its own half-width plus half the gap on
+            // the inside. Subtree centers are placed exactly that
+            // distance from the parent's centerX. This guarantees the
+            // two subtrees don't overlap each other or the parent's
+            // own diamond.
+            const leftWidth = node.path1NodeId != null
+                ? subtreeWidth(nodesById.get(node.path1NodeId))
+                : 2 * MIN_HALF_WIDTH;
+            const rightWidth = node.path2NodeId != null
+                ? subtreeWidth(nodesById.get(node.path2NodeId))
+                : 2 * MIN_HALF_WIDTH;
+            const leftCenter = centerX - leftWidth / 2 - SUBTREE_GAP / 2;
+            const rightCenter = centerX + rightWidth / 2 + SUBTREE_GAP / 2;
+            if (node.path1NodeId != null) {
+                place(nodesById.get(node.path1NodeId), leftCenter);
+            }
+            if (node.path2NodeId != null) {
+                place(nodesById.get(node.path2NodeId), rightCenter);
+            }
+            // Empty slots produce no positioned child but their + button
+            // position is computed later in buildPlusButtons using these
+            // same conventions.
+        } else if (node.path1NodeId != null) {
+            // Non-Decision: single child directly below.
+            place(nodesById.get(node.path1NodeId), centerX);
         }
     }
-    return out;
+
+    // Lay out roots side by side. Most workflows have exactly one root
+    // (the Start). Multiple roots happen with legacy orphan data. The
+    // initial cursor sits at LEFT_PADDING; the post-pass shift below
+    // adjusts if Decision asymmetry pushes the leftmost subtree below
+    // the padding line.
+    let cursorX = LEFT_PADDING;
+    for (const r of roots) {
+        const w = subtreeWidth(r);
+        place(r, cursorX + w / 2);
+        cursorX += w + SUBTREE_GAP * 2;
+    }
+
+    // Shift the whole graph so its leftmost extent is at LEFT_PADDING.
+    // Asymmetric Decision subtrees can push a path1 child to a smaller
+    // x than its parent's, occasionally below the initial cursorX. The
+    // shift here keeps nothing clipped on the left edge of the viewBox.
+    if (positioned.length > 0) {
+        const minX = Math.min(...positioned.map((n) => n.x - NODE_W / 2));
+        if (minX < LEFT_PADDING) {
+            const shift = LEFT_PADDING - minX;
+            for (const n of positioned) {
+                n.x += shift;
+            }
+        }
+    }
+
+    return positioned;
 }
+
+// --- + buttons -----------------------------------------------------------
 
 function buildPlusButtons(positioned, positionedById) {
     const buttons = [];
     for (const n of positioned) {
         if (TERMINAL_TYPES.has(n.nodeTypeId)) continue;
-
-        // Slot 1 — every non-terminal has it.
         buttons.push(makeButton(n, 1, positionedById));
-
-        // Slot 2 — only Decision has a second slot.
         if (n.nodeTypeId === NODE_TYPE.Decision) {
             buttons.push(makeButton(n, 2, positionedById));
         }
@@ -282,26 +408,37 @@ function buildPlusButtons(positioned, positionedById) {
 }
 
 function makeButton(parent, slot, positionedById) {
-    // Slot's current child id from the data we were handed. If null,
-    // it's an empty slot; we draw the + below the parent. If non-null,
-    // we draw the + on the edge between parent and child.
     const childId = slot === 1 ? parent.path1NodeId : parent.path2NodeId;
     const child = childId == null ? null : positionedById.get(childId);
 
-    const isDecisionParent = parent.nodeTypeId === NODE_TYPE.Decision;
-    const offsetX = isDecisionParent
-        ? (slot === 1 ? -COL_WIDTH / 3 : COL_WIDTH / 3)
-        : 0;
-
     let x, y;
     if (child) {
-        // Midpoint of the edge.
-        x = (parent.x + child.x) / 2;
-        y = (parent.y + child.y) / 2;
+        // Insert-between case. Position the + at the midpoint of the
+        // existing edge so the click target sits "on the line" the user
+        // is inserting into.
+        if (parent.nodeTypeId === NODE_TYPE.Decision) {
+            // The edge has an L-shape: horizontal then vertical.
+            // Put the + at the corner of the L so it's visible against
+            // either segment.
+            x = child.x;
+            y = (parent.y + child.y) / 2;
+        } else {
+            x = (parent.x + child.x) / 2;
+            y = (parent.y + child.y) / 2;
+        }
     } else {
-        // Below the parent at the would-be child position.
-        x = parent.x + offsetX;
-        y = parent.y + NODE_H / 2 + 30;
+        // Empty slot. Place the + where a future child's top would land,
+        // so the dashed edge from the parent's slot anchor to the +
+        // matches the shape a real edge would take once filled.
+        y = parent.y + ROW_HEIGHT - PLUS_RADIUS - 4;
+        if (parent.nodeTypeId === NODE_TYPE.Decision) {
+            // Reserved width for an eventual child subtree.
+            x = slot === 1
+                ? parent.x - MIN_HALF_WIDTH - SUBTREE_GAP / 2
+                : parent.x + MIN_HALF_WIDTH + SUBTREE_GAP / 2;
+        } else {
+            x = parent.x;
+        }
     }
 
     return {
@@ -313,16 +450,57 @@ function makeButton(parent, slot, positionedById) {
     };
 }
 
+// --- edge routing --------------------------------------------------------
+
+// Returns an SVG path "d" attribute for a real edge from parent to child.
+//   - Non-Decision: vertical line, parent bottom-center → child top-center.
+//   - Decision: L-shape. Leaves the left vertex going horizontally to
+//     the child's x, then drops vertically to the child's top.
+function edgePath(parent, child, kind) {
+    if (parent.nodeTypeId !== NODE_TYPE.Decision) {
+        const sx = parent.x;
+        const sy = parent.y + NODE_H / 2;
+        const tx = child.x;
+        const ty = child.y - NODE_H / 2;
+        return `M${sx},${sy} L${tx},${ty}`;
+    }
+    // Decision: leave the slot's vertex horizontally, then drop straight
+    // down. The corner sits directly above the child.
+    const vertexX = kind === "path1"
+        ? parent.x - NODE_W / 2
+        : parent.x + NODE_W / 2;
+    const vertexY = parent.y;
+    const turnX = child.x;
+    const turnY = vertexY;
+    const childTopX = child.x;
+    const childTopY = child.y - NODE_H / 2;
+    return `M${vertexX},${vertexY} L${turnX},${turnY} L${childTopX},${childTopY}`;
+}
+
+// Same shape as edgePath but terminates at the + button (slightly above
+// the button's center so the line meets the circle's edge cleanly).
+function danglingEdgePath(parent, plusButton) {
+    if (!parent) return "";
+    const stopX = plusButton.x;
+    const stopY = plusButton.y - PLUS_RADIUS;
+    if (parent.nodeTypeId !== NODE_TYPE.Decision) {
+        const sx = parent.x;
+        const sy = parent.y + NODE_H / 2;
+        return `M${sx},${sy} L${stopX},${stopY}`;
+    }
+    const vertexX = plusButton.slot === 1
+        ? parent.x - NODE_W / 2
+        : parent.x + NODE_W / 2;
+    const vertexY = parent.y;
+    return `M${vertexX},${vertexY} L${stopX},${vertexY} L${stopX},${stopY}`;
+}
+
+// --- click handler -------------------------------------------------------
+
 function onPlusClick(event, button, dotNetRef) {
-    // Stop the click from bubbling — there's nothing else to handle it
-    // today, but it keeps future per-node click handlers from getting
-    // confused.
     event.stopPropagation();
     if (!dotNetRef) return;
 
-    // Pass click viewport coords too so Blazor can position the popover
-    // near the + button. The page is responsible for translating these
-    // to wherever the popover anchor lives.
     dotNetRef.invokeMethodAsync(
         "OnPlusClickedAsync",
         button.parentId, button.slot, button.slotEmpty,
@@ -331,6 +509,8 @@ function onPlusClick(event, button, dotNetRef) {
         console.warn("workflow-designer: Blazor plus-click callback failed.", err);
     });
 }
+
+// --- shape drawing -------------------------------------------------------
 
 function nodeLabel(node) {
     return NODE_LABEL[node.nodeTypeId] || `Type ${node.nodeTypeId}`;
