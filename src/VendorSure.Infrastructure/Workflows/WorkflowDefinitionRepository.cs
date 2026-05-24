@@ -52,15 +52,20 @@ internal sealed class WorkflowDefinitionRepository : IWorkflowDefinitionReposito
         string? notes,
         CancellationToken ct = default)
     {
-        // One conditional INSERT enforcing three rules at once:
-        //   - parent version exists AND is Draft
-        //   - no other workflow on this version already has this name
-        // start_node_id is intentionally left NULL — the designer (Chunk 10)
-        // sets it once a Start node lands on the canvas.
+        // Two-statement transaction: insert the workflow row, then insert
+        // its Start node, then point start_node_id at the new Start.
+        // Every workflow has a Start by invariant (Phase 5 / Chunk 7 design
+        // shift): the schema's start_node_id is nullable only because of
+        // the create-then-set ordering — semantically Start is mandatory.
         //
-        // When any rule fails the INSERT is skipped and SCOPE_IDENTITY
-        // returns NULL. Focused probes below disambiguate.
-        const string insertSql = @"
+        // The workflow INSERT is conditional on the same three rules as
+        // before (version exists AND is Draft, name not taken). The Start
+        // INSERT only runs if the workflow INSERT produced a new id.
+        //
+        // Atomicity matters: if the Start INSERT failed for any reason
+        // we'd otherwise leave a workflow row with start_node_id = NULL,
+        // breaking the invariant. The transaction ensures all-or-nothing.
+        const string insertWorkflowSql = @"
             INSERT INTO dbo.workflow_definitions
                 (request_type_version_id, name, notes)
             SELECT @versionId, @name, @notes
@@ -72,51 +77,92 @@ internal sealed class WorkflowDefinitionRepository : IWorkflowDefinitionReposito
                     WHERE request_type_version_id = @versionId AND name = @name);
             SELECT CAST(SCOPE_IDENTITY() AS int);";
 
-        using var connection = await _connectionFactory.CreateOpenConnectionAsync(ct);
+        // Start node: node_type_id=1, no block, no children yet,
+        // execution_level=1 (Start is THE root of its workflow).
+        const string insertStartSql = @"
+            INSERT INTO dbo.workflow_nodes
+                (workflow_definition_id, node_type_id, block_catalog_id, execution_level)
+            VALUES (@workflowId, 1, NULL, 1);
+            SELECT CAST(SCOPE_IDENTITY() AS int);";
 
-        var newId = await connection.QuerySingleOrDefaultAsync<int?>(
-            new CommandDefinition(
-                insertSql,
-                new
+        const string setStartFkSql = @"
+            UPDATE dbo.workflow_definitions
+            SET start_node_id = @startNodeId
+            WHERE id = @workflowId;";
+
+        using var connection = await _connectionFactory.CreateOpenConnectionAsync(ct);
+        using var transaction = connection.BeginTransaction();
+
+        try
+        {
+            var newId = await connection.QuerySingleOrDefaultAsync<int?>(
+                new CommandDefinition(
+                    insertWorkflowSql,
+                    new
+                    {
+                        versionId = requestTypeVersionId,
+                        name,
+                        notes,
+                        draftCode = RequestStateCodes.Draft,
+                    },
+                    transaction,
+                    cancellationToken: ct));
+
+            if (newId is null)
+            {
+                // No row inserted. Roll back (no-op since nothing wrote),
+                // then run the probes outside the transaction to figure
+                // out which rule rejected.
+                transaction.Rollback();
+
+                var versionExists = await connection.ExecuteScalarAsync<int>(
+                    new CommandDefinition(
+                        "SELECT COUNT(*) FROM dbo.request_type_versions WHERE id = @versionId;",
+                        new { versionId = requestTypeVersionId },
+                        cancellationToken: ct)) > 0;
+                if (!versionExists)
                 {
-                    versionId = requestTypeVersionId,
-                    name,
-                    notes,
-                    draftCode = RequestStateCodes.Draft,
-                },
+                    return new CreateWorkflowResult(CreateWorkflowOutcome.RejectedVersionNotFound, null);
+                }
+
+                var versionIsDraft = await connection.ExecuteScalarAsync<int>(
+                    new CommandDefinition(
+                        @"SELECT COUNT(*) FROM dbo.request_type_versions
+                          WHERE id = @versionId AND request_state = @draftCode;",
+                        new { versionId = requestTypeVersionId, draftCode = RequestStateCodes.Draft },
+                        cancellationToken: ct)) > 0;
+                if (!versionIsDraft)
+                {
+                    return new CreateWorkflowResult(CreateWorkflowOutcome.RejectedNotDraft, null);
+                }
+
+                return new CreateWorkflowResult(CreateWorkflowOutcome.RejectedNameConflict, null);
+            }
+
+            var startNodeId = await connection.QuerySingleAsync<int>(
+                new CommandDefinition(
+                    insertStartSql,
+                    new { workflowId = newId.Value },
+                    transaction,
+                    cancellationToken: ct));
+
+            await connection.ExecuteAsync(new CommandDefinition(
+                setStartFkSql,
+                new { workflowId = newId.Value, startNodeId },
+                transaction,
                 cancellationToken: ct));
 
-        if (newId is not null)
-        {
+            transaction.Commit();
             return new CreateWorkflowResult(CreateWorkflowOutcome.Created, newId);
         }
-
-        // Probe order:
-        //  1. Does the version exist at all?
-        //  2. If yes, is it Draft?
-        //  3. If yes, the UNIQUE must have rejected — name conflict.
-        var versionExists = await connection.ExecuteScalarAsync<int>(
-            new CommandDefinition(
-                "SELECT COUNT(*) FROM dbo.request_type_versions WHERE id = @versionId;",
-                new { versionId = requestTypeVersionId },
-                cancellationToken: ct)) > 0;
-        if (!versionExists)
+        catch
         {
-            return new CreateWorkflowResult(CreateWorkflowOutcome.RejectedVersionNotFound, null);
+            // Any exception inside the transaction (e.g. constraint
+            // violation on the Start insert) rolls everything back so we
+            // don't leave a workflow row without a Start.
+            try { transaction.Rollback(); } catch { /* already rolled */ }
+            throw;
         }
-
-        var versionIsDraft = await connection.ExecuteScalarAsync<int>(
-            new CommandDefinition(
-                @"SELECT COUNT(*) FROM dbo.request_type_versions
-                  WHERE id = @versionId AND request_state = @draftCode;",
-                new { versionId = requestTypeVersionId, draftCode = RequestStateCodes.Draft },
-                cancellationToken: ct)) > 0;
-        if (!versionIsDraft)
-        {
-            return new CreateWorkflowResult(CreateWorkflowOutcome.RejectedNotDraft, null);
-        }
-
-        return new CreateWorkflowResult(CreateWorkflowOutcome.RejectedNameConflict, null);
     }
 
     public async Task<UpdateWorkflowResult> UpdateAsync(

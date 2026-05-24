@@ -548,3 +548,133 @@ Two refinements worth holding onto:
   a successful create still work because the listeners persist
   across `innerHTML = ""` (which clears children but not
   listeners on the container itself).
+
+## 2026-05-24 — Auto-Start in workflow create + MudBlazor popover positioning is fragile
+
+Phase 5 / Chunk 7. A design pivot replaced Chunk 6's free-drag
+palette with a +-button graph-construction model rooted at Start.
+Several patterns worth recording from the implementation:
+
+**Auto-Start lives inside the workflow create transaction.** Every
+workflow now has a Start node by invariant. Two ways to enforce
+this:
+  - At every caller site: each caller manually creates Start after
+    creating the workflow. Repetitive and easy to forget.
+  - At the repo surface: `WorkflowDefinitionRepository.CreateAsync`
+    inserts the workflow row AND the Start node AND updates
+    `start_node_id`, all in one transaction.
+
+The repo-level approach wins because the invariant ("workflow ⇒
+Start") becomes a property of the data layer that every caller —
+present and future — gets for free. The engine, future export
+tools, audit reports — none of them have to remember "Start may
+be null." The schema's `start_node_id` field is nullable because
+SQL Server can't natively express "FK that must reference a row
+that doesn't exist yet at insert time"; semantically Start is
+mandatory and the repo guarantees that.
+
+Atomic across two statements requires an explicit transaction.
+The probe pattern (run "why was this rejected" queries after a
+no-op INSERT) had to move outside the transaction since we roll
+back before probing — the probes look at the post-failure world,
+not the transactional one.
+
+**`InsertChildAsync` is a new high-level operation, not an
+extension of CreateAsync.** Considered both. The old `CreateAsync`
+created orphan nodes (level=0, no path FKs) for the Chunk 6 free-
+drop model. The new operation atomically:
+  1. inserts the new node at parent.level + 1,
+  2. wires the parent's slot to point at it,
+  3. if the slot had a previous child, wires that as the new
+     node's child (splice/insert-between),
+  4. renumbers the displaced subtree via the existing recursive
+     CTE.
+
+Argument: extend CreateAsync with optional parent + slot
+parameters. Verdict: rejected. The semantics are different enough
+(orphan vs splice, no FK touched vs FK rewiring, no renumber vs
+recursive renumber) that overloading one method obscures the
+distinction at call sites. A new method makes the high-level
+operation legible. `CreateAsync` stays as the leaf-create
+primitive — used by 50+ existing tests and a viable building
+block for future "import workflow" features.
+
+**Renumbering the displaced subtree composes for free.** Insert-
+between case: new node N takes level L; the displaced child C and
+all its descendants shift down by 1. The existing
+`RenumberSubtreeAsync(rootNodeId, rootLevel)` walks via path1/
+path2 setting each descendant to parent.new_level + 1. Calling it
+with `(newNodeId, parent.level + 1)` produces:
+  N at L (new wired into parent's slot)
+  C at L+1 (it's N's child via path1 or pathN)
+  C's descendants at L+2, L+3, ...
+
+Exactly the shift-by-1 behavior we need. The CTE was written for
+SetPath wiring; insert-between is a natural composition with no
+new SQL.
+
+**Strip the new invariant in test fixtures rather than rewrite
+50+ tests.** Auto-Start means every workflow created via the repo
+has one node already. Existing `WorkflowNodeRepositoryTests`
+assume a clean "no nodes" workflow and build their own graphs
+starting with their own Start. With auto-Start they'd see an
+extra row.
+
+Two options:
+  - Rewrite every test to account for auto-Start (50+ sites).
+  - Strip auto-Start in `SetupAsync` via raw SQL (one helper).
+
+The fixture-level fix wins because:
+  - 50+ tests already pass against the old contract; they're
+    correct tests of node-repo behavior in isolation.
+  - The new behavior (auto-Start) is a property of
+    `WorkflowDefinitionRepository`, not `WorkflowNodeRepository`.
+    Tests of the node repo shouldn't care.
+  - The strip is a one-line raw-SQL helper called in `SetupAsync`,
+    bypassing the Draft gate so the fixture works whether or not
+    a test forces the version into a non-Draft state.
+
+The new contract is covered by tests in
+`WorkflowDefinitionRepositoryTests` instead.
+
+**MudBlazor popover positioning at JS-supplied coordinates is
+fragile; use a centered dialog.** Originally planned: render a
+`MudPopover` anchored near the + button the user clicked. JS
+sends `clientX` / `clientY` to Blazor; Blazor positions a hidden
+anchor div at those coordinates; popover anchors to it.
+
+Reality: MudBlazor 9 uses a portal pattern. `MudPopoverProvider`
+at the layout root renders all popover content there, regardless
+of where the popover is declared. Positioning is computed by
+MudBlazor's own JS using `AnchorOrigin`, `TransformOrigin`, and
+the anchor element's bounding rect. Trying to override via inline
+`Style="top:...; left:...;"` fights MudBlazor's positioning JS
+and produces unreliable results (see MudBlazor issues #3241,
+#7451 for the genre).
+
+Switched to a centered `MudDialog`. Less precious UX but
+mechanically rock-solid: dialog renders in the dialog provider,
+centered, no positioning logic needed. Perfectly fine for a
+5-power-user internal tool. The `OnPlusClickedAsync` callback
+still accepts `clientX` / `clientY` from JS for forward-
+compatibility — if a future variant wants the popover UX, the
+plumbing is half-built — but the current dialog discards them.
+
+**MudPaper for drag sources is unreliable, but plain `<div
+class="mud-paper mud-paper-outlined">` is fine.** Carried over
+from Chunk 6's lesson, but worth restating in the new context:
+when you need raw HTML attributes (`draggable`, `ondragstart`,
+or in this chunk's case, inline `@onclick` with parameters), use
+a plain `<div>` and apply MudBlazor's utility classes manually.
+You get the visual styling without coupling to MudBlazor's
+sometimes-quirky attribute-splat behavior.
+
+**General principle this chunk reinforced.** When the picture
+matches but the dependencies are fighting you, simplify the
+picture. The popover-near-click UX was nicer-sounding but the
+plumbing cost was high. The centered dialog gets 80% of the
+benefit at 10% of the friction. Same with the `CreateAsync` vs
+`InsertChildAsync` decision: keeping the primitive separate from
+the high-level op gave both clear names and clear semantics,
+where overloading one would have made every call site harder to
+read.

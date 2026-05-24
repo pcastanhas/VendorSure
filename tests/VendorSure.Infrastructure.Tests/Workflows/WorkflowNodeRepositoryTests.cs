@@ -618,6 +618,326 @@ public sealed class WorkflowNodeRepositoryTests
         Assert.Equal(SetStartNodeOutcome.RejectedNotStartNode, result);
     }
 
+    // ==== InsertChildAsync ================================================
+    //
+    // The high-level "click + on a slot" operation. Atomic: insert new node,
+    // wire it into parent's slot, splice an existing child if present,
+    // renumber the displaced subtree. Two scenarios per test pair: append
+    // (slot was empty) and insert-between (slot was filled).
+
+    [Fact]
+    public async Task InsertChildAsync_appends_Process_under_Start_at_level_2()
+    {
+        await using var f = await SetupAsync();
+        var start = (await _nodes.CreateAsync(StartNode(f.WorkflowId))).Id!.Value;
+        await _nodes.SetStartNodeAsync(f.WorkflowId, start);  // sets start to level 1
+
+        var result = await _nodes.InsertChildAsync(new InsertChildRequest(
+            ParentNodeId: start, ParentSlot: 1,
+            NodeTypeId: WorkflowNodeTypeIds.Process, BlockCatalogId: f.BlockId));
+        Assert.Equal(InsertChildOutcome.Inserted, result.Outcome);
+        Assert.NotNull(result.Id);
+
+        var newNode = await _nodes.GetByIdAsync(result.Id!.Value);
+        Assert.NotNull(newNode);
+        Assert.Equal(WorkflowNodeTypeIds.Process, newNode!.NodeTypeId);
+        Assert.Equal(f.BlockId, newNode.BlockCatalogId);
+        Assert.Equal(2, newNode.ExecutionLevel);
+        Assert.Null(newNode.Path1NodeId);
+        Assert.Null(newNode.Path2NodeId);
+
+        var startAfter = await _nodes.GetByIdAsync(start);
+        Assert.Equal(result.Id, startAfter!.Path1NodeId);
+    }
+
+    [Fact]
+    public async Task InsertChildAsync_appends_Decision_under_Process_at_correct_level()
+    {
+        await using var f = await SetupAsync();
+        var start = (await _nodes.CreateAsync(StartNode(f.WorkflowId))).Id!.Value;
+        await _nodes.SetStartNodeAsync(f.WorkflowId, start);
+
+        // Build Start (1) -> Process (2). Then insert a Decision under
+        // Process, which should land at level 3.
+        var processResult = await _nodes.InsertChildAsync(new InsertChildRequest(
+            start, 1, WorkflowNodeTypeIds.Process, f.BlockId));
+        var process = processResult.Id!.Value;
+
+        var decisionResult = await _nodes.InsertChildAsync(new InsertChildRequest(
+            process, 1, WorkflowNodeTypeIds.Decision, f.BlockId));
+        Assert.Equal(InsertChildOutcome.Inserted, decisionResult.Outcome);
+
+        var decision = await _nodes.GetByIdAsync(decisionResult.Id!.Value);
+        Assert.Equal(3, decision!.ExecutionLevel);
+    }
+
+    [Fact]
+    public async Task InsertChildAsync_inserts_Process_between_Start_and_Approved_shifts_level()
+    {
+        await using var f = await SetupAsync();
+        var start = (await _nodes.CreateAsync(StartNode(f.WorkflowId))).Id!.Value;
+        await _nodes.SetStartNodeAsync(f.WorkflowId, start);
+
+        // First: append Approved directly under Start. Approved at level 2.
+        var approvedResult = await _nodes.InsertChildAsync(new InsertChildRequest(
+            start, 1, WorkflowNodeTypeIds.Approved, BlockCatalogId: null));
+        var approved = approvedResult.Id!.Value;
+        Assert.Equal(2, (await _nodes.GetByIdAsync(approved))!.ExecutionLevel);
+
+        // Now insert a Process between Start and Approved. Start.path1
+        // should switch from Approved to the new Process; Process.path1
+        // should be Approved; Approved.level should shift to 3.
+        var processResult = await _nodes.InsertChildAsync(new InsertChildRequest(
+            start, 1, WorkflowNodeTypeIds.Process, f.BlockId));
+        Assert.Equal(InsertChildOutcome.Inserted, processResult.Outcome);
+        var process = processResult.Id!.Value;
+
+        var startAfter = await _nodes.GetByIdAsync(start);
+        Assert.Equal(process, startAfter!.Path1NodeId);
+
+        var processNode = await _nodes.GetByIdAsync(process);
+        Assert.Equal(approved, processNode!.Path1NodeId);
+        Assert.Equal(2, processNode.ExecutionLevel);
+
+        var approvedAfter = await _nodes.GetByIdAsync(approved);
+        Assert.Equal(3, approvedAfter!.ExecutionLevel);
+    }
+
+    [Fact]
+    public async Task InsertChildAsync_inserts_Decision_between_with_DecisionChildSlot_1_puts_displaced_on_path1()
+    {
+        await using var f = await SetupAsync();
+        var start = (await _nodes.CreateAsync(StartNode(f.WorkflowId))).Id!.Value;
+        await _nodes.SetStartNodeAsync(f.WorkflowId, start);
+
+        // Start -> Approved chain.
+        var approved = (await _nodes.InsertChildAsync(new InsertChildRequest(
+            start, 1, WorkflowNodeTypeIds.Approved, null))).Id!.Value;
+
+        // Insert a Decision between Start and Approved; displaced Approved
+        // inherits on path1. Path2 stays null (user fills it later).
+        var decisionResult = await _nodes.InsertChildAsync(new InsertChildRequest(
+            ParentNodeId: start, ParentSlot: 1,
+            NodeTypeId: WorkflowNodeTypeIds.Decision, BlockCatalogId: f.BlockId,
+            DecisionChildSlot: 1));
+        Assert.Equal(InsertChildOutcome.Inserted, decisionResult.Outcome);
+
+        var decision = await _nodes.GetByIdAsync(decisionResult.Id!.Value);
+        Assert.Equal(approved, decision!.Path1NodeId);
+        Assert.Null(decision.Path2NodeId);
+
+        var startAfter = await _nodes.GetByIdAsync(start);
+        Assert.Equal(decisionResult.Id, startAfter!.Path1NodeId);
+
+        // Levels: Start=1, Decision=2, Approved=3.
+        Assert.Equal(1, startAfter.ExecutionLevel);
+        Assert.Equal(2, decision.ExecutionLevel);
+        Assert.Equal(3, (await _nodes.GetByIdAsync(approved))!.ExecutionLevel);
+    }
+
+    [Fact]
+    public async Task InsertChildAsync_inserts_Decision_between_with_DecisionChildSlot_2_puts_displaced_on_path2()
+    {
+        await using var f = await SetupAsync();
+        var start = (await _nodes.CreateAsync(StartNode(f.WorkflowId))).Id!.Value;
+        await _nodes.SetStartNodeAsync(f.WorkflowId, start);
+
+        var approved = (await _nodes.InsertChildAsync(new InsertChildRequest(
+            start, 1, WorkflowNodeTypeIds.Approved, null))).Id!.Value;
+
+        var decisionResult = await _nodes.InsertChildAsync(new InsertChildRequest(
+            start, 1, WorkflowNodeTypeIds.Decision, f.BlockId,
+            DecisionChildSlot: 2));
+
+        var decision = await _nodes.GetByIdAsync(decisionResult.Id!.Value);
+        Assert.Null(decision!.Path1NodeId);
+        Assert.Equal(approved, decision.Path2NodeId);
+    }
+
+    [Fact]
+    public async Task InsertChildAsync_renumbers_entire_displaced_subtree()
+    {
+        // Start (1) -> Process (2) -> Approved (3). Insert another Process
+        // between Start and Process. After: Start (1) -> NewProcess (2) ->
+        // OldProcess (3) -> Approved (4).
+        await using var f = await SetupAsync();
+        var start = (await _nodes.CreateAsync(StartNode(f.WorkflowId))).Id!.Value;
+        await _nodes.SetStartNodeAsync(f.WorkflowId, start);
+
+        var oldProcess = (await _nodes.InsertChildAsync(new InsertChildRequest(
+            start, 1, WorkflowNodeTypeIds.Process, f.BlockId))).Id!.Value;
+        var approved = (await _nodes.InsertChildAsync(new InsertChildRequest(
+            oldProcess, 1, WorkflowNodeTypeIds.Approved, null))).Id!.Value;
+
+        Assert.Equal(3, (await _nodes.GetByIdAsync(approved))!.ExecutionLevel);
+
+        var newProcessResult = await _nodes.InsertChildAsync(new InsertChildRequest(
+            start, 1, WorkflowNodeTypeIds.Process, f.BlockId));
+
+        var newProcess = newProcessResult.Id!.Value;
+        Assert.Equal(2, (await _nodes.GetByIdAsync(newProcess))!.ExecutionLevel);
+        Assert.Equal(3, (await _nodes.GetByIdAsync(oldProcess))!.ExecutionLevel);
+        Assert.Equal(4, (await _nodes.GetByIdAsync(approved))!.ExecutionLevel);
+
+        // Verify the wiring chain.
+        Assert.Equal(newProcess, (await _nodes.GetByIdAsync(start))!.Path1NodeId);
+        Assert.Equal(oldProcess, (await _nodes.GetByIdAsync(newProcess))!.Path1NodeId);
+        Assert.Equal(approved, (await _nodes.GetByIdAsync(oldProcess))!.Path1NodeId);
+    }
+
+    [Fact]
+    public async Task InsertChildAsync_returns_RejectedParentNotFound_for_unknown_parent()
+    {
+        await using var f = await SetupAsync();
+        var result = await _nodes.InsertChildAsync(new InsertChildRequest(
+            ParentNodeId: int.MaxValue - 1, ParentSlot: 1,
+            NodeTypeId: WorkflowNodeTypeIds.Approved, BlockCatalogId: null));
+        Assert.Equal(InsertChildOutcome.RejectedParentNotFound, result.Outcome);
+        Assert.Null(result.Id);
+    }
+
+    [Fact]
+    public async Task InsertChildAsync_returns_RejectedNotDraft_when_version_is_not_Draft()
+    {
+        await using var f = await SetupAsync();
+        var start = (await _nodes.CreateAsync(StartNode(f.WorkflowId))).Id!.Value;
+        await _nodes.SetStartNodeAsync(f.WorkflowId, start);
+
+        await ForceVersionStateAsync(f.VersionId, RequestStateCodes.InService);
+
+        var result = await _nodes.InsertChildAsync(new InsertChildRequest(
+            start, 1, WorkflowNodeTypeIds.Approved, null));
+        Assert.Equal(InsertChildOutcome.RejectedNotDraft, result.Outcome);
+    }
+
+    [Fact]
+    public async Task InsertChildAsync_returns_RejectedParentIsTerminal_for_terminal_parent()
+    {
+        await using var f = await SetupAsync();
+        var start = (await _nodes.CreateAsync(StartNode(f.WorkflowId))).Id!.Value;
+        await _nodes.SetStartNodeAsync(f.WorkflowId, start);
+        var approved = (await _nodes.InsertChildAsync(new InsertChildRequest(
+            start, 1, WorkflowNodeTypeIds.Approved, null))).Id!.Value;
+
+        var result = await _nodes.InsertChildAsync(new InsertChildRequest(
+            approved, 1, WorkflowNodeTypeIds.Process, f.BlockId));
+        Assert.Equal(InsertChildOutcome.RejectedParentIsTerminal, result.Outcome);
+    }
+
+    [Fact]
+    public async Task InsertChildAsync_returns_RejectedInvalidShape_for_Process_without_block()
+    {
+        await using var f = await SetupAsync();
+        var start = (await _nodes.CreateAsync(StartNode(f.WorkflowId))).Id!.Value;
+        await _nodes.SetStartNodeAsync(f.WorkflowId, start);
+
+        var result = await _nodes.InsertChildAsync(new InsertChildRequest(
+            start, 1, WorkflowNodeTypeIds.Process, BlockCatalogId: null));
+        Assert.Equal(InsertChildOutcome.RejectedInvalidShape, result.Outcome);
+    }
+
+    [Fact]
+    public async Task InsertChildAsync_returns_RejectedInvalidShape_for_Start_with_block()
+    {
+        await using var f = await SetupAsync();
+        var start = (await _nodes.CreateAsync(StartNode(f.WorkflowId))).Id!.Value;
+        await _nodes.SetStartNodeAsync(f.WorkflowId, start);
+
+        var result = await _nodes.InsertChildAsync(new InsertChildRequest(
+            start, 1, WorkflowNodeTypeIds.Start, BlockCatalogId: f.BlockId));
+        Assert.Equal(InsertChildOutcome.RejectedInvalidShape, result.Outcome);
+    }
+
+    [Fact]
+    public async Task InsertChildAsync_returns_RejectedInvalidShape_when_splicing_terminal()
+    {
+        // UI shouldn't offer terminals in the picker when the slot is
+        // non-empty (terminals can't have children, so they can't take
+        // the displaced child). Defensive enum return.
+        await using var f = await SetupAsync();
+        var start = (await _nodes.CreateAsync(StartNode(f.WorkflowId))).Id!.Value;
+        await _nodes.SetStartNodeAsync(f.WorkflowId, start);
+        await _nodes.InsertChildAsync(new InsertChildRequest(
+            start, 1, WorkflowNodeTypeIds.Process, f.BlockId));
+
+        // Now Start.path1 is non-empty (points at the Process). Try to
+        // splice an Approved between them — that would require Approved
+        // to inherit the Process as its child, which terminals can't do.
+        var result = await _nodes.InsertChildAsync(new InsertChildRequest(
+            start, 1, WorkflowNodeTypeIds.Approved, BlockCatalogId: null));
+        Assert.Equal(InsertChildOutcome.RejectedInvalidShape, result.Outcome);
+    }
+
+    [Fact]
+    public async Task InsertChildAsync_throws_for_ParentSlot_out_of_range()
+    {
+        await using var f = await SetupAsync();
+        var start = (await _nodes.CreateAsync(StartNode(f.WorkflowId))).Id!.Value;
+        await _nodes.SetStartNodeAsync(f.WorkflowId, start);
+
+        await Assert.ThrowsAsync<ArgumentException>(() =>
+            _nodes.InsertChildAsync(new InsertChildRequest(
+                start, ParentSlot: 0,
+                WorkflowNodeTypeIds.Approved, null)));
+
+        await Assert.ThrowsAsync<ArgumentException>(() =>
+            _nodes.InsertChildAsync(new InsertChildRequest(
+                start, ParentSlot: 3,
+                WorkflowNodeTypeIds.Approved, null)));
+    }
+
+    [Fact]
+    public async Task InsertChildAsync_throws_when_DecisionChildSlot_missing_for_splice_of_Decision()
+    {
+        // Set up a Start -> Approved chain. Try to splice a Decision in
+        // between without DecisionChildSlot — caller bug.
+        await using var f = await SetupAsync();
+        var start = (await _nodes.CreateAsync(StartNode(f.WorkflowId))).Id!.Value;
+        await _nodes.SetStartNodeAsync(f.WorkflowId, start);
+        await _nodes.InsertChildAsync(new InsertChildRequest(
+            start, 1, WorkflowNodeTypeIds.Approved, null));
+
+        await Assert.ThrowsAsync<ArgumentException>(() =>
+            _nodes.InsertChildAsync(new InsertChildRequest(
+                start, 1, WorkflowNodeTypeIds.Decision, f.BlockId,
+                DecisionChildSlot: null)));
+    }
+
+    [Fact]
+    public async Task InsertChildAsync_throws_for_ParentSlot_2_on_non_Decision_parent()
+    {
+        await using var f = await SetupAsync();
+        var start = (await _nodes.CreateAsync(StartNode(f.WorkflowId))).Id!.Value;
+        await _nodes.SetStartNodeAsync(f.WorkflowId, start);
+
+        // Start has only path1; slot 2 is meaningless. Caller bug.
+        await Assert.ThrowsAsync<ArgumentException>(() =>
+            _nodes.InsertChildAsync(new InsertChildRequest(
+                start, ParentSlot: 2,
+                WorkflowNodeTypeIds.Approved, null)));
+    }
+
+    [Fact]
+    public async Task InsertChildAsync_DecisionChildSlot_is_ignored_on_append()
+    {
+        // When the parent's slot is empty (append case), DecisionChildSlot
+        // is meaningless — the new Decision has no displaced child to
+        // place. The arg should be accepted (not validated as "required"),
+        // and the new Decision should have both path1 and path2 null.
+        await using var f = await SetupAsync();
+        var start = (await _nodes.CreateAsync(StartNode(f.WorkflowId))).Id!.Value;
+        await _nodes.SetStartNodeAsync(f.WorkflowId, start);
+
+        var result = await _nodes.InsertChildAsync(new InsertChildRequest(
+            start, 1, WorkflowNodeTypeIds.Decision, f.BlockId,
+            DecisionChildSlot: 1));  // value ignored, no error
+        Assert.Equal(InsertChildOutcome.Inserted, result.Outcome);
+
+        var decision = await _nodes.GetByIdAsync(result.Id!.Value);
+        Assert.Null(decision!.Path1NodeId);
+        Assert.Null(decision.Path2NodeId);
+    }
+
     // ---- fixture / helpers ---------------------------------------------
 
     private sealed class Fixture : IAsyncDisposable
@@ -649,6 +969,16 @@ public sealed class WorkflowNodeRepositoryTests
 
         var wfId = (await _workflows.CreateAsync(
             versionId, $"_test_wf_{Guid.NewGuid():N}", null)).Id!.Value;
+
+        // Phase 5 / Chunk 7: WorkflowDefinitionRepository.CreateAsync now
+        // auto-inserts a Start node and points start_node_id at it. The
+        // node-repo tests want a clean "no nodes yet" slate — they assert
+        // on counts, build their own graphs, etc. Strip the auto-Start
+        // here so each test starts where it used to. Bypasses the Draft
+        // gate via raw SQL because some tests force the version to
+        // non-Draft after setup, and the test fixture must work in both.
+        await StripAutoStartAsync(wfId);
+
         var blockId = await InsertTestBlockAsync();
 
         return new Fixture
@@ -692,6 +1022,23 @@ public sealed class WorkflowNodeRepositoryTests
         await c.ExecuteAsync(
             "UPDATE dbo.workflow_nodes SET execution_level = @level WHERE id = @nodeId;",
             new { nodeId, level });
+    }
+
+    // Phase 5 / Chunk 7: workflow create auto-inserts a Start. Node-repo
+    // tests assume an empty workflow; this helper resets to that state.
+    // Null the FK first (cycle: workflow_definitions.start_node_id ->
+    // workflow_nodes.id), then delete the Start row(s).
+    private async Task StripAutoStartAsync(int workflowId)
+    {
+        using var c = await _connectionFactory.CreateOpenConnectionAsync();
+        await c.ExecuteAsync(@"
+            UPDATE dbo.workflow_definitions
+            SET start_node_id = NULL
+            WHERE id = @workflowId;
+
+            DELETE FROM dbo.workflow_nodes
+            WHERE workflow_definition_id = @workflowId;",
+            new { workflowId });
     }
 
     private async Task SetPath1RawAsync(int sourceId, int? targetId)

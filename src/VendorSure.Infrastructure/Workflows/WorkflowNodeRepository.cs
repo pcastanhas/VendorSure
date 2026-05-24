@@ -136,6 +136,230 @@ internal sealed class WorkflowNodeRepository : IWorkflowNodeRepository
             null);
     }
 
+    public async Task<InsertChildResult> InsertChildAsync(
+        InsertChildRequest request, CancellationToken ct = default)
+    {
+        // Caller-bug validation: parentSlot must be 1 or 2. The decision-
+        // child-slot constraint (must be set when new node is Decision
+        // AND parent's slot is non-empty) is checked after we know
+        // whether the slot is empty.
+        if (request.ParentSlot is not (1 or 2))
+        {
+            throw new ArgumentException(
+                $"ParentSlot must be 1 or 2; got {request.ParentSlot}.",
+                nameof(request));
+        }
+        if (request.DecisionChildSlot is { } dcs && dcs is not (1 or 2))
+        {
+            throw new ArgumentException(
+                $"DecisionChildSlot must be null, 1, or 2; got {dcs}.",
+                nameof(request));
+        }
+
+        // Shape pre-validation — same logic as CreateAsync, surfacing the
+        // same RejectedInvalidShape outcome rather than letting the schema
+        // CHECK throw an SqlException.
+        var requiresBlock = WorkflowNodeTypeIds.RequiresBlock(request.NodeTypeId);
+        if (requiresBlock && request.BlockCatalogId is null)
+        {
+            return new InsertChildResult(InsertChildOutcome.RejectedInvalidShape, null);
+        }
+        if (!requiresBlock && request.BlockCatalogId is not null)
+        {
+            return new InsertChildResult(InsertChildOutcome.RejectedInvalidShape, null);
+        }
+
+        using var connection = await _connectionFactory.CreateOpenConnectionAsync(ct);
+        using var transaction = connection.BeginTransaction();
+
+        try
+        {
+            // Lock + read the parent's shape and the current value of the
+            // chosen slot, plus the Draft state of the version. One round-
+            // trip. UPDLOCK serialises concurrent inserts on the same
+            // parent slot — without it, two concurrent users could both
+            // see the slot as "empty" and race to fill it.
+            var parent = await connection.QuerySingleOrDefaultAsync<ParentProbe>(
+                new CommandDefinition(
+                    @"SELECT n.node_type_id           AS NodeTypeId,
+                             n.workflow_definition_id AS WorkflowDefinitionId,
+                             n.execution_level        AS ExecutionLevel,
+                             n.path1_node_id          AS Path1NodeId,
+                             n.path2_node_id          AS Path2NodeId,
+                             ver.request_state        AS RequestStateCode
+                      FROM dbo.workflow_nodes n WITH (UPDLOCK, ROWLOCK)
+                      INNER JOIN dbo.workflow_definitions wd ON wd.id = n.workflow_definition_id
+                      INNER JOIN dbo.request_type_versions ver ON ver.id = wd.request_type_version_id
+                      WHERE n.id = @parentId;",
+                    new { parentId = request.ParentNodeId },
+                    transaction,
+                    cancellationToken: ct));
+
+            if (parent is null)
+            {
+                transaction.Rollback();
+                return new InsertChildResult(InsertChildOutcome.RejectedParentNotFound, null);
+            }
+
+            if (parent.RequestStateCode != RequestStateCodes.Draft)
+            {
+                transaction.Rollback();
+                return new InsertChildResult(InsertChildOutcome.RejectedNotDraft, null);
+            }
+
+            // Terminals can't have children. Defensive — UI shouldn't show
+            // a + button on a terminal in the first place.
+            if (parent.NodeTypeId is WorkflowNodeTypeIds.Approved
+                                  or WorkflowNodeTypeIds.Rejected
+                                  or WorkflowNodeTypeIds.Cancelled)
+            {
+                transaction.Rollback();
+                return new InsertChildResult(InsertChildOutcome.RejectedParentIsTerminal, null);
+            }
+
+            // Slot 2 on a non-Decision parent is a caller bug: only
+            // Decision parents have a path2. Start and Process only have
+            // path1 (slot 1).
+            if (request.ParentSlot == 2 && parent.NodeTypeId != WorkflowNodeTypeIds.Decision)
+            {
+                throw new ArgumentException(
+                    $"ParentSlot=2 is only valid for Decision parents; parent {request.ParentNodeId} is type {parent.NodeTypeId}.",
+                    nameof(request));
+            }
+
+            // Capture the currently-occupied slot value (if any) — this
+            // is the "displaced child" in the insert-between case.
+            var displacedChildId = request.ParentSlot == 1
+                ? parent.Path1NodeId
+                : parent.Path2NodeId;
+
+            // Insert-between with a Decision new-node: caller must specify
+            // which Decision slot inherits the displaced child. Without
+            // that we'd be guessing.
+            if (displacedChildId is not null
+                && request.NodeTypeId == WorkflowNodeTypeIds.Decision
+                && request.DecisionChildSlot is null)
+            {
+                throw new ArgumentException(
+                    "DecisionChildSlot is required when inserting a Decision between a parent and an existing child.",
+                    nameof(request));
+            }
+
+            // Terminals can't be inserted-between because they have no
+            // out-edges — there's no slot to put the displaced child in.
+            // UI must filter terminals out of the picker for non-empty
+            // slots. Defensive enum here (could also throw; treating as
+            // an invalid-shape outcome keeps it consistent with other
+            // structural rejections).
+            if (displacedChildId is not null
+                && (request.NodeTypeId is WorkflowNodeTypeIds.Approved
+                                       or WorkflowNodeTypeIds.Rejected
+                                       or WorkflowNodeTypeIds.Cancelled))
+            {
+                transaction.Rollback();
+                return new InsertChildResult(InsertChildOutcome.RejectedInvalidShape, null);
+            }
+
+            // Insert the new node at parent.level + 1. Path FKs depend on
+            // whether we're appending or splicing:
+            //   - Append:  new.path1 = NULL, new.path2 = NULL.
+            //   - Splice (new is Start/Process): new.path1 = displaced.
+            //   - Splice (new is Decision): new.pathN = displaced (N from
+            //     DecisionChildSlot); the other slot stays NULL.
+            int? newPath1 = null;
+            int? newPath2 = null;
+            if (displacedChildId is int dcId)
+            {
+                if (request.NodeTypeId == WorkflowNodeTypeIds.Decision)
+                {
+                    // Caller specified which side inherits the displaced
+                    // child via DecisionChildSlot (we already validated
+                    // it's non-null and in {1, 2} above).
+                    if (request.DecisionChildSlot == 1)
+                    {
+                        newPath1 = dcId;
+                    }
+                    else
+                    {
+                        newPath2 = dcId;
+                    }
+                }
+                else
+                {
+                    // Start/Process new node has only path1. The displaced
+                    // child goes there.
+                    newPath1 = dcId;
+                }
+            }
+
+            var newNodeLevel = parent.ExecutionLevel + 1;
+
+            const string insertSql = @"
+                INSERT INTO dbo.workflow_nodes
+                    (workflow_definition_id, node_type_id, block_catalog_id,
+                     execution_level, path1_node_id, path2_node_id)
+                VALUES (@WorkflowDefinitionId, @NodeTypeId, @BlockCatalogId,
+                        @ExecutionLevel, @Path1NodeId, @Path2NodeId);
+                SELECT CAST(SCOPE_IDENTITY() AS int);";
+
+            var newNodeId = await connection.QuerySingleAsync<int>(
+                new CommandDefinition(
+                    insertSql,
+                    new
+                    {
+                        WorkflowDefinitionId = parent.WorkflowDefinitionId,
+                        request.NodeTypeId,
+                        request.BlockCatalogId,
+                        ExecutionLevel = newNodeLevel,
+                        Path1NodeId = newPath1,
+                        Path2NodeId = newPath2,
+                    },
+                    transaction,
+                    cancellationToken: ct));
+
+            // Wire the parent's slot to point at the new node. This
+            // replaces the previous value (the displaced child reference,
+            // if any), which now lives only on the new node's path1/pathN.
+            var wireParentSql = request.ParentSlot == 1
+                ? "UPDATE dbo.workflow_nodes SET path1_node_id = @newNodeId WHERE id = @parentId;"
+                : "UPDATE dbo.workflow_nodes SET path2_node_id = @newNodeId WHERE id = @parentId;";
+            await connection.ExecuteAsync(new CommandDefinition(
+                wireParentSql,
+                new { newNodeId, parentId = request.ParentNodeId },
+                transaction,
+                cancellationToken: ct));
+
+            // Renumber starting from the new node at its just-computed
+            // level. The recursive CTE in RenumberSubtreeAsync walks via
+            // path1/path2:
+            //   - Append case: only the new node (no descendants yet).
+            //   - Splice case: new -> displaced -> displaced's
+            //     descendants. The displaced child ends up at L+1
+            //     (one deeper than before, since it's now one level
+            //     deeper from the root), and its descendants follow.
+            await RenumberSubtreeAsync(connection, transaction, newNodeId, newNodeLevel, ct);
+
+            transaction.Commit();
+            return new InsertChildResult(InsertChildOutcome.Inserted, newNodeId);
+        }
+        catch
+        {
+            // ArgumentException or any other failure rolls back atomically.
+            try { transaction.Rollback(); } catch { /* already rolled */ }
+            throw;
+        }
+    }
+
+    private sealed class ParentProbe
+    {
+        public int NodeTypeId { get; init; }
+        public int WorkflowDefinitionId { get; init; }
+        public int ExecutionLevel { get; init; }
+        public int? Path1NodeId { get; init; }
+        public int? Path2NodeId { get; init; }
+        public string RequestStateCode { get; init; } = string.Empty;
+    }
+
     public async Task<UpdateNodeResult> UpdateAsync(WorkflowNode edited, CancellationToken ct = default)
     {
         // Edits only the property fields. node_type, block_catalog_id,

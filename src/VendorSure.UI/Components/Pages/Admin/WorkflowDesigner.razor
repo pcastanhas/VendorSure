@@ -1,9 +1,9 @@
 @*
-    Workflow Designer — shell + D3 canvas + drag-to-add palette.
+    Workflow Designer — canvas + on-node + buttons + block picker.
 
     URL: /admin/request-types/{TypeId}/workflows/{WorkflowId}/designer
 
-    Phase 5 / Chunks 4-6:
+    Phase 5 / Chunks 4-7:
       - Loads the type + workflow + nodes + block catalog via the repos.
       - Renders breadcrumb back to the type detail page.
       - Shows a read-only banner when the parent version isn't Draft.
@@ -11,20 +11,31 @@
         (D3-backed) and mounts it inside <div id="workflow-canvas">.
         The module owns that div completely; Blazor never re-renders
         inside it after first mount.
-      - Renders a left-rail palette of draggable items: Start + three
-        terminals (fixed, no catalog ref) and one entry per active
-        block_catalog row (Process / Decision blocks). The palette is
-        hidden when the version isn't Draft.
-      - On drop, the JS module calls back into Blazor (OnPaletteDropAsync)
-        which creates a workflow_nodes row via the existing repo, then
-        re-mounts the canvas with the updated graph.
-      - Provides a temporary test affordance: a table listing the
-        workflow's nodes (id / type / level / paths). Slated for removal
-        at end of Phase 5 once the canvas is enough on its own.
 
-    No edge-drawing or node editing yet — that's Chunks 7-10. The
-    canvas itself is still read-only in Chunk 6 (the palette is the
-    only write path).
+      Chunk 7 design shift: the canvas is now opinionated, not a dumb
+      drop target. Every workflow has a Start node (auto-created in
+      WorkflowDefinitionRepository.CreateAsync). The JS module draws
+      a + button on every non-terminal node's open slots:
+        - one + per Start/Process (centered below)
+        - two + per Decision (left = path1, right = path2)
+      Clicking a + opens a block-picker dialog. (Originally explored as
+      a popover anchored to the click point, but MudBlazor 9's popover
+      portal pattern made reliable positioning fragile; a centered
+      dialog is mechanically simpler and fine for our 5-power-user
+      scale.) When the slot is empty, the picker offers terminals;
+      when the slot has an existing child (insert-between), terminals
+      are hidden because they can't take a displaced child.
+
+      Inserting a Decision into a non-empty slot opens an extra dialog:
+      "which side should <existing child> attach to?" The chosen side
+      goes through as InsertChildAsync's DecisionChildSlot parameter.
+
+      A temporary node-list table below the canvas dumps id / type /
+      level / paths for cross-reference during dev. Slated for removal
+      at end of Phase 5.
+
+    Still ahead: node property editor (Chunk 8), delete affordances
+    (Chunk 9), promotion-time validation (Chunk 10).
 *@
 
 @page "/admin/request-types/{TypeId:int}/workflows/{WorkflowId:int}/designer"
@@ -86,93 +97,146 @@ else
         </MudAlert>
     }
 
-    <MudGrid Spacing="3" Class="mb-4">
-        @if (IsDraft)
-        {
-            @* Palette rail. Hidden when the version is read-only — the user
-               can't drop anything anyway, so the affordance would be a lie. *@
-            <MudItem xs="12" md="3">
-                <MudPaper Class="pa-3" Elevation="1">
-                    <MudText Typo="Typo.subtitle2" Class="mb-2 mud-text-secondary">
-                        Palette
-                    </MudText>
-                    @* Fixed entries: every workflow has access to Start and the
-                       three terminals plus the generic Decision shape. Block-
-                       less node types — they don't reference block_catalog. *@
-                    <MudText Typo="Typo.caption" Class="mb-1 mud-text-secondary">
-                        Control flow
-                    </MudText>
-                    @foreach (var fixedItem in FixedPaletteItems)
-                    {
-                        @* Plain div not MudPaper: passes ondragstart through
-                           reliably without depending on MudBlazor attribute-
-                           splat behavior (see scoped CSS for the styling). *@
-                        <div class="palette-item pa-2 mb-1 mud-paper mud-paper-outlined"
-                             draggable="true"
-                             ondragstart="@DragStartScript(fixedItem.NodeTypeId, null)">
-                            <MudStack Row="true" AlignItems="AlignItems.Center" Spacing="2">
-                                <div style="width: 14px; height: 14px; border-radius: 3px;
-                                            background-color: @fixedItem.Color;
-                                            border: 1px solid rgba(0,0,0,0.15);"></div>
-                                <MudText Typo="Typo.body2">@fixedItem.Label</MudText>
-                            </MudStack>
-                        </div>
-                    }
+    <MudPaper Class="pa-3 mb-4" Elevation="1">
+        @* Canvas div: the workflow-designer JS module owns this after
+           first mount. Blazor must not re-render inside it. The dashed
+           border is a visual cue for empty / pre-mount state. The
+           module draws + buttons on each non-terminal node's open
+           slots when the workflow is editable (a non-null
+           DotNetObjectReference signals editable to the JS side). *@
+        <MudText Typo="Typo.subtitle2" Class="mb-2 mud-text-secondary">
+            Canvas
+        </MudText>
+        <div id="workflow-canvas"
+             @key="_workflow.Id"
+             style="width: 100%; min-height: 360px; border: 1px dashed var(--mud-palette-divider); border-radius: 4px; overflow: auto;">
+        </div>
+    </MudPaper>
 
-                    @* Dynamic entries: one row per active block_catalog. Grouped
-                       by node type so Process and Decision blocks cluster
-                       together. Empty section if no catalog rows yet — surface
-                       the seed hint so first-time users aren't lost. *@
-                    @if (_blocks.Count == 0)
-                    {
-                        <MudText Typo="Typo.caption" Class="mt-3 mud-text-disabled">
-                            No blocks in the catalog yet. Seed
-                            <code>dbo.block_catalog</code> to populate this section.
-                        </MudText>
-                    }
-                    else
-                    {
-                        foreach (var group in _blocks.GroupBy(b => b.NodeTypeId))
-                        {
-                            <MudText Typo="Typo.caption" Class="mt-3 mb-1 mud-text-secondary">
-                                @NodeTypeLabel(group.Key) blocks
-                            </MudText>
-                            @foreach (var block in group)
-                            {
-                                <div class="palette-item pa-2 mb-1 mud-paper mud-paper-outlined"
-                                     draggable="true"
-                                     ondragstart="@DragStartScript(block.NodeTypeId, block.Id)">
-                                    <MudStack Row="true" AlignItems="AlignItems.Center" Spacing="2">
-                                        <div style="width: 14px; height: 14px; border-radius: 3px;
-                                                    background-color: @(block.Color ?? DefaultColorFor(block.NodeTypeId));
-                                                    border: 1px solid rgba(0,0,0,0.15);"></div>
-                                        <MudText Typo="Typo.body2">@block.Description</MudText>
-                                    </MudStack>
-                                </div>
-                            }
-                        }
-                    }
-                </MudPaper>
-            </MudItem>
-        }
+    @* Block-picker dialog. Originally explored as a MudPopover anchored
+       to the click point, but MudBlazor 9's popover portal pattern made
+       reliable positioning fragile. A centered dialog is less precious
+       UX but rock-solid mechanically and perfectly fine for a 5-power-
+       user internal tool. The variant string differs between add (empty
+       slot) and insert (slot has an existing child) so the title is
+       honest about what's about to happen. *@
+    <MudDialog @bind-Visible="_pickerOpen"
+               Options="@(new DialogOptions { CloseButton = true, MaxWidth = MaxWidth.ExtraSmall, FullWidth = true })">
+        <TitleContent>
+            <MudText Typo="Typo.h6">
+                @(_pickerSlotEmpty ? "Add child" : "Insert child")
+            </MudText>
+        </TitleContent>
+        <DialogContent>
+            @if (_pickerSlotEmpty)
+            {
+                @* Terminals only offered when slot is empty — they have no
+                   children and can't take a displaced child as one. *@
+                <MudText Typo="Typo.caption" Class="mud-text-secondary mb-1">Terminals</MudText>
+                @foreach (var t in TerminalPickerItems)
+                {
+                    <div class="picker-row pa-2 mb-1 mud-paper mud-paper-outlined"
+                         @onclick="@(() => OnPickerSelect(t.NodeTypeId, null))">
+                        <MudStack Row="true" AlignItems="AlignItems.Center" Spacing="2">
+                            <div style="width: 14px; height: 14px; border-radius: 3px;
+                                        background-color: @t.Color;
+                                        border: 1px solid rgba(0,0,0,0.15);"></div>
+                            <MudText Typo="Typo.body2">@t.Label</MudText>
+                        </MudStack>
+                    </div>
+                }
+            }
 
-        <MudItem xs="12" md="@(IsDraft ? 9 : 12)">
-            <MudPaper Class="pa-3" Elevation="1">
-                @* Canvas div: the workflow-designer JS module owns this
-                   after first mount. Blazor must not re-render inside it.
-                   The dashed border is a visual cue for empty / pre-mount
-                   state and gets recolored by the JS module's
-                   .workflow-canvas--drop-target class during dragover. *@
-                <MudText Typo="Typo.subtitle2" Class="mb-2 mud-text-secondary">
-                    Canvas
+            @{
+                var processBlocks = _blocks.Where(b => b.NodeTypeId == WorkflowNodeTypeIds.Process).ToList();
+                var decisionBlocks = _blocks.Where(b => b.NodeTypeId == WorkflowNodeTypeIds.Decision).ToList();
+            }
+
+            @if (processBlocks.Count > 0)
+            {
+                <MudText Typo="Typo.caption" Class="mud-text-secondary mb-1 mt-2">Process blocks</MudText>
+                @foreach (var b in processBlocks)
+                {
+                    <div class="picker-row pa-2 mb-1 mud-paper mud-paper-outlined"
+                         @onclick="@(() => OnPickerSelect(b.NodeTypeId, b.Id))">
+                        <MudStack Row="true" AlignItems="AlignItems.Center" Spacing="2">
+                            <div style="width: 14px; height: 14px; border-radius: 3px;
+                                        background-color: @(b.Color ?? DefaultColorFor(b.NodeTypeId));
+                                        border: 1px solid rgba(0,0,0,0.15);"></div>
+                            <MudText Typo="Typo.body2">@b.Description</MudText>
+                        </MudStack>
+                    </div>
+                }
+            }
+
+            @if (decisionBlocks.Count > 0)
+            {
+                <MudText Typo="Typo.caption" Class="mud-text-secondary mb-1 mt-2">Decision blocks</MudText>
+                @foreach (var b in decisionBlocks)
+                {
+                    <div class="picker-row pa-2 mb-1 mud-paper mud-paper-outlined"
+                         @onclick="@(() => OnPickerSelect(b.NodeTypeId, b.Id))">
+                        <MudStack Row="true" AlignItems="AlignItems.Center" Spacing="2">
+                            <div style="width: 14px; height: 14px; border-radius: 3px;
+                                        background-color: @(b.Color ?? DefaultColorFor(b.NodeTypeId));
+                                        border: 1px solid rgba(0,0,0,0.15);"></div>
+                            <MudText Typo="Typo.body2">@b.Description</MudText>
+                        </MudStack>
+                    </div>
+                }
+            }
+
+            @if (_blocks.Count == 0 && !_pickerSlotEmpty)
+            {
+                @* Insert-between with no Process or Decision blocks to offer.
+                   Terminals are excluded. So there's literally nothing the
+                   user can pick — surface that explicitly. *@
+                <MudText Typo="Typo.caption" Class="mud-text-disabled mt-2">
+                    No blocks available for splicing here. Either add an empty
+                    slot first, or seed <code>dbo.block_catalog</code>.
                 </MudText>
-                <div id="workflow-canvas"
-                     @key="_workflow.Id"
-                     style="width: 100%; min-height: 360px; border: 1px dashed var(--mud-palette-divider); border-radius: 4px; overflow: auto;">
-                </div>
-            </MudPaper>
-        </MudItem>
-    </MudGrid>
+            }
+            else if (_blocks.Count == 0)
+            {
+                <MudText Typo="Typo.caption" Class="mud-text-disabled mt-2">
+                    No Process or Decision blocks in the catalog yet. Seed
+                    <code>dbo.block_catalog</code> to add some.
+                </MudText>
+            }
+        </DialogContent>
+    </MudDialog>
+
+    @* Decision-which-side dialog. Opened when the user picks a Decision
+       block from the picker AND the slot they clicked on is non-empty
+       (insert-between case). The user must choose whether the displaced
+       existing child goes on path1 (left) or path2 (right) of the new
+       Decision. Cancel just closes — no node is created. *@
+    <MudDialog @bind-Visible="_decisionDialogOpen"
+               Options="@(new DialogOptions { CloseButton = true, MaxWidth = MaxWidth.ExtraSmall, FullWidth = true })">
+        <TitleContent>
+            <MudText Typo="Typo.h6">Inserting a Decision</MudText>
+        </TitleContent>
+        <DialogContent>
+            <MudText Typo="Typo.body2" Class="mb-3">
+                Which side of the new Decision should
+                <strong>@_pendingDisplacedChildLabel</strong>
+                attach to? The other side will start empty for you to fill in.
+            </MudText>
+        </DialogContent>
+        <DialogActions>
+            <MudButton OnClick="OnDecisionSideCanceled">Cancel</MudButton>
+            <MudButton Color="Color.Primary"
+                       Variant="Variant.Outlined"
+                       OnClick="@(() => OnDecisionSideChosen(1))">
+                Left (path 1)
+            </MudButton>
+            <MudButton Color="Color.Primary"
+                       Variant="Variant.Filled"
+                       OnClick="@(() => OnDecisionSideChosen(2))">
+                Right (path 2)
+            </MudButton>
+        </DialogActions>
+    </MudDialog>
 
     @* --- TEMPORARY: node-list test affordance ----------------------------
        Provides a textual readout of the workflow's nodes so we can
@@ -290,14 +354,31 @@ else
 
     // JS interop state. The module reference is resolved on first render
     // (after the canvas div exists in the DOM) and kept for the lifetime
-    // of the page so a future "Refresh" affordance — Chunks 6+ — can
-    // re-mount without reimporting. _dotNetRef is the JS-callable handle
-    // for OnPaletteDropAsync; it's also long-lived and disposed alongside
-    // the module.
+    // of the page so re-mounts after edits don't have to reimport.
+    // _dotNetRef is the JS-callable handle for OnPlusClickedAsync; it's
+    // long-lived and disposed alongside the module.
     private IJSObjectReference? _module;
     private DotNetObjectReference<WorkflowDesigner>? _dotNetRef;
     private bool _mounted;
     private const string CanvasSelector = "#workflow-canvas";
+
+    // Block-picker dialog state. _pickerSlotEmpty controls whether
+    // terminals are offered in the picker (terminals can't be
+    // inserted-between because they have no children to take a
+    // displaced child).
+    private bool _pickerOpen;
+    private int _pickerParentId;
+    private int _pickerParentSlot;
+    private bool _pickerSlotEmpty;
+
+    // Decision-which-side dialog state. When the picker selection is a
+    // Decision AND the parent's slot is non-empty (insert-between case),
+    // we need to ask the user which Decision slot inherits the displaced
+    // child. The dialog reads this struct; OnDecisionSideChosen reads
+    // it back to call InsertChildAsync with the right DecisionChildSlot.
+    private bool _decisionDialogOpen;
+    private int? _pendingDecisionBlockId;
+    private string _pendingDisplacedChildLabel = string.Empty;
 
     private bool IsDraft => _version?.RequestState == RequestState.Draft;
     private string PageTitleText => _workflow is null ? "Workflow Designer" : _workflow.Name;
@@ -362,9 +443,9 @@ else
 
             _nodes = await NodeRepository.ListByWorkflowIdAsync(WorkflowId);
 
-            // Block catalog drives the palette. Loading it here keeps all
-            // page state hydrated before the first render, so the palette
-            // doesn't flicker into existence after the canvas. The catalog
+            // Block catalog drives the picker dialog options. Loading it
+            // here keeps page state hydrated before the dialog opens so
+            // there's no fetch delay when the user clicks +. The catalog
             // is small (a handful of rows even at production scale).
             _blocks = await BlockRepository.ListActiveAsync();
 
@@ -447,12 +528,19 @@ else
     // transform in C# keeps the JS module dumb and easy to reason about.
     private object BuildGraphPayload()
     {
+        // The JS module needs each node's path FK values to decide where
+        // the + buttons should go (empty slot → below the parent,
+        // non-empty slot → on the edge between parent and child). Emit
+        // them alongside the other fields rather than reconstructing
+        // from the edge list on the JS side.
         var nodes = _nodes.Select(n => new
         {
             id = n.Id,
             nodeTypeId = n.NodeTypeId,
             blockCatalogId = n.BlockCatalogId,
             executionLevel = n.ExecutionLevel,
+            path1NodeId = n.Path1NodeId,
+            path2NodeId = n.Path2NodeId,
             promptText = n.PromptText,
         }).ToArray();
 
@@ -501,45 +589,19 @@ else
     }
 
     /// <summary>
-    /// Fixed palette entries — the four node types that don't carry a
-    /// <c>block_catalog</c> reference. Per the schema CHECK:
-    /// Process (2) and Decision (3) require a block_catalog_id; Start (1)
-    /// and the three terminals (Approved 4, Rejected 5, Cancelled 6)
-    /// forbid one. So Decision is intentionally NOT here — it shows up
-    /// in the catalog-driven section once IT seeds a Decision block.
+    /// Picker entries for the three terminal node types (Approved /
+    /// Rejected / Cancelled). Offered only when the slot being filled
+    /// is empty (terminals have no out-edges, so they can't accept a
+    /// displaced child in the insert-between case).
     /// </summary>
-    private static readonly FixedPaletteItem[] FixedPaletteItems = new[]
+    private static readonly TerminalPickerItem[] TerminalPickerItems = new[]
     {
-        new FixedPaletteItem(WorkflowNodeTypeIds.Start,     "Start",     "#4caf50"),
-        new FixedPaletteItem(WorkflowNodeTypeIds.Approved,  "Approved",  "#43a047"),
-        new FixedPaletteItem(WorkflowNodeTypeIds.Rejected,  "Rejected",  "#e53935"),
-        new FixedPaletteItem(WorkflowNodeTypeIds.Cancelled, "Cancelled", "#757575"),
+        new TerminalPickerItem(WorkflowNodeTypeIds.Approved,  "Approved",  "#43a047"),
+        new TerminalPickerItem(WorkflowNodeTypeIds.Rejected,  "Rejected",  "#e53935"),
+        new TerminalPickerItem(WorkflowNodeTypeIds.Cancelled, "Cancelled", "#757575"),
     };
 
-    private readonly record struct FixedPaletteItem(int NodeTypeId, string Label, string Color);
-
-    /// <summary>
-    /// Renders an inline JS expression that puts the palette payload into
-    /// the drag's dataTransfer. We can't use Blazor's @ondragstart for
-    /// this — DragEventArgs.DataTransfer is read-only on the server side,
-    /// so any setData() call has to happen in browser JS during the actual
-    /// dragstart event. This emits a string that becomes the value of the
-    /// element's <c>ondragstart</c> attribute.
-    /// </summary>
-    private static string DragStartScript(int nodeTypeId, int? blockCatalogId)
-    {
-        var blockJson = blockCatalogId.HasValue
-            ? blockCatalogId.Value.ToString(System.Globalization.CultureInfo.InvariantCulture)
-            : "null";
-        // Single-quoted string literal in the attribute. The dataTransfer
-        // payload is JSON the JS module's drop handler will parse with
-        // JSON.parse. Set effectAllowed=copy so the dragover handler's
-        // dropEffect=copy is honored (otherwise some browsers veto the
-        // drop with a default 'none').
-        return
-            $"event.dataTransfer.setData('application/json', '{{\"nodeTypeId\":{nodeTypeId},\"blockCatalogId\":{blockJson}}}'); " +
-            "event.dataTransfer.effectAllowed = 'copy';";
-    }
+    private readonly record struct TerminalPickerItem(int NodeTypeId, string Label, string Color);
 
     private static string DefaultColorFor(int nodeTypeId) => nodeTypeId switch
     {
@@ -549,51 +611,128 @@ else
     };
 
     /// <summary>
-    /// Called by the JS module when a palette item is dropped on the
-    /// canvas. Creates a new <c>workflow_nodes</c> row via the existing
-    /// repository — CreateAsync inserts at execution_level=0 with both
-    /// path FKs null, which is exactly the "orphan node" posture the
-    /// designer wants. The user wires the node up by drawing edges in
-    /// later chunks.
+    /// Invoked from JS when the user clicks a + button on the canvas.
+    /// Captures the click context (which parent, which slot, whether
+    /// the slot is empty) and opens the block picker. The JS module
+    /// also sends viewport pixel coords for the click — we accept
+    /// them for forward-compatibility (a future popover variant
+    /// could use them) but the current MudDialog picker is centered
+    /// so the coordinates are unused.
     /// </summary>
-    /// <remarks>
-    /// This method is invoked from JS via the DotNetObjectReference
-    /// handed to <c>mount</c>. After a successful create we reload the
-    /// node list and re-call the JS module's <c>mount</c> with the new
-    /// graph, which tears down and redraws the SVG. For our scale (≤ 10
-    /// nodes per workflow) this is cheap enough; incremental updates
-    /// can come if profiling ever shows it matters.
-    /// </remarks>
     [JSInvokable]
-    public async Task OnPaletteDropAsync(int nodeTypeId, int? blockCatalogId)
+    public Task OnPlusClickedAsync(int parentNodeId, int parentSlot, bool slotEmpty, int clientX, int clientY)
     {
-        if (_workflow is null)
+        _ = clientX;
+        _ = clientY;
+        _pickerParentId = parentNodeId;
+        _pickerParentSlot = parentSlot;
+        _pickerSlotEmpty = slotEmpty;
+        _pickerOpen = true;
+
+        StateHasChanged();
+        return Task.CompletedTask;
+    }
+
+    /// <summary>
+    /// User picked an option from the picker dialog. Two paths:
+    ///  - Decision new-node into a non-empty slot: open the
+    ///    Decision-which-side dialog and wait for the user.
+    ///  - All other cases: call InsertChildAsync directly.
+    /// </summary>
+    private async Task OnPickerSelect(int nodeTypeId, int? blockCatalogId)
+    {
+        _pickerOpen = false;
+
+        if (nodeTypeId == WorkflowNodeTypeIds.Decision && !_pickerSlotEmpty)
         {
-            // The page is in a bad state — shouldn't be possible since the
-            // module isn't mounted before _workflow loads, but defend
-            // against late drops anyway.
+            // Need to ask which Decision slot inherits the displaced
+            // child before we can insert. Stash the block id, look up the
+            // displaced child's label for the dialog copy, and open it.
+            _pendingDecisionBlockId = blockCatalogId;
+            _pendingDisplacedChildLabel = LookupDisplacedChildLabel();
+            _decisionDialogOpen = true;
+            StateHasChanged();
             return;
         }
 
-        // The repo's CreateAsync takes a WorkflowNode seed. It forces
-        // execution_level=0 and both path FKs to null inside the INSERT
-        // (per Chunk 3's contract — "orphan node" posture), so we don't
-        // populate them here. All the other optional fields stay null
-        // for a freshly-dropped palette item; the node-property editor
-        // (Chunk 8) will fill them in.
-        var seed = new WorkflowNode
-        {
-            WorkflowDefinitionId = _workflow.Id,
-            NodeTypeId = nodeTypeId,
-            BlockCatalogId = blockCatalogId,
-        };
+        await InsertChildAsync(nodeTypeId, blockCatalogId, decisionChildSlot: null);
+    }
 
-        var result = await NodeRepository.CreateAsync(seed);
+    /// <summary>
+    /// User chose which side of the inserted Decision should inherit the
+    /// displaced child. Closes the dialog, then performs the insert.
+    /// </summary>
+    private async Task OnDecisionSideChosen(int decisionChildSlot)
+    {
+        _decisionDialogOpen = false;
+        var blockId = _pendingDecisionBlockId;
+        _pendingDecisionBlockId = null;
+        await InsertChildAsync(WorkflowNodeTypeIds.Decision, blockId, decisionChildSlot);
+    }
+
+    private void OnDecisionSideCanceled()
+    {
+        _decisionDialogOpen = false;
+        _pendingDecisionBlockId = null;
+        _pendingDisplacedChildLabel = string.Empty;
+    }
+
+    /// <summary>
+    /// Looks up the displaced child's display label for the
+    /// Decision-which-side dialog copy. The child id is whichever path FK
+    /// the parent currently holds in <see cref="_pickerParentSlot"/>.
+    /// Best-effort: if we can't find it (shouldn't happen — the slot was
+    /// non-empty when JS sent us here) we fall back to "the existing node".
+    /// </summary>
+    private string LookupDisplacedChildLabel()
+    {
+        var parent = _nodes.FirstOrDefault(n => n.Id == _pickerParentId);
+        if (parent is null) return "the existing node";
+
+        var childId = _pickerParentSlot == 1 ? parent.Path1NodeId : parent.Path2NodeId;
+        if (childId is null) return "the existing node";
+
+        var child = _nodes.FirstOrDefault(n => n.Id == childId.Value);
+        if (child is null) return $"node #{childId.Value}";
+
+        return $"{NodeTypeLabel(child.NodeTypeId)} #{child.Id}";
+    }
+
+    private async Task InsertChildAsync(int nodeTypeId, int? blockCatalogId, int? decisionChildSlot)
+    {
+        if (_workflow is null)
+        {
+            // Defensive: the page is in a bad state.
+            return;
+        }
+
+        var request = new InsertChildRequest(
+            ParentNodeId: _pickerParentId,
+            ParentSlot: _pickerParentSlot,
+            NodeTypeId: nodeTypeId,
+            BlockCatalogId: blockCatalogId,
+            DecisionChildSlot: decisionChildSlot);
+
+        InsertChildResult result;
+        try
+        {
+            result = await NodeRepository.InsertChildAsync(request);
+        }
+        catch (ArgumentException ex)
+        {
+            // Caller-bug from our perspective (UI sent something the repo
+            // refuses). Log and surface a generic error — these aren't
+            // user-facing in normal flow.
+            Logger.LogError(ex,
+                "InsertChildAsync rejected the request: parentId={ParentId}, slot={Slot}, type={Type}, block={Block}, decisionChildSlot={DCS}.",
+                _pickerParentId, _pickerParentSlot, nodeTypeId, blockCatalogId, decisionChildSlot);
+            Snackbar.Add("Could not add node — internal error.", Severity.Error);
+            return;
+        }
 
         switch (result.Outcome)
         {
-            case CreateNodeOutcome.Created:
-                // Reload the node list and ask the JS module to redraw.
+            case InsertChildOutcome.Inserted:
                 _nodes = await NodeRepository.ListByWorkflowIdAsync(WorkflowId);
                 if (_module is not null)
                 {
@@ -604,31 +743,30 @@ else
                     }
                     catch (JSDisconnectedException)
                     {
-                        // User navigated away mid-create. Nothing to do.
+                        // User navigated away. Nothing to do.
                     }
                 }
-                StateHasChanged(); // Refresh the readout table below the canvas.
+                StateHasChanged();
                 Snackbar.Add($"Added {NodeTypeLabel(nodeTypeId)} node.", Severity.Success);
                 break;
 
-            case CreateNodeOutcome.RejectedWorkflowNotFound:
-                Snackbar.Add("Workflow no longer exists.", Severity.Error);
+            case InsertChildOutcome.RejectedParentNotFound:
+                Snackbar.Add("Parent node no longer exists. Reload the page.", Severity.Warning);
                 break;
 
-            case CreateNodeOutcome.RejectedNotDraft:
+            case InsertChildOutcome.RejectedNotDraft:
                 Snackbar.Add(
                     "Version is no longer Draft. Reload the page.",
                     Severity.Warning);
                 break;
 
-            case CreateNodeOutcome.RejectedInvalidShape:
-                // The CHECK on workflow_nodes pairs node_type with
-                // block_catalog presence. Mismatches reach here when:
-                //   - a Process or Decision palette item is dropped but
-                //     its blockCatalogId vanished between drag and drop
-                //     (race with IT deactivating a block);
-                //   - or a malformed dataTransfer payload arrives.
-                // Either way the palette wiring is the bug, not the user.
+            case InsertChildOutcome.RejectedParentIsTerminal:
+                // UI shouldn't have rendered a + button here. Surface
+                // generically; the page reload below will fix the state.
+                Snackbar.Add("Cannot add a child to a terminal node.", Severity.Warning);
+                break;
+
+            case InsertChildOutcome.RejectedInvalidShape:
                 Snackbar.Add(
                     "Could not add node: invalid type/block combination.",
                     Severity.Warning);

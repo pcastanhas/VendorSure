@@ -43,7 +43,57 @@ public sealed class WorkflowDefinitionRepositoryTests
         Assert.Equal(f.VersionId, fetched!.RequestTypeVersionId);
         Assert.Equal("_test_wf_main", fetched.Name);
         Assert.Equal("first workflow", fetched.Notes);
-        Assert.Null(fetched.StartNodeId);  // freshly-created workflow has no start node
+
+        // Phase 5 / Chunk 7: every workflow has a Start node by invariant.
+        // The repo creates Workflow + Start in one transaction and points
+        // start_node_id at the new Start.
+        Assert.NotNull(fetched.StartNodeId);
+    }
+
+    [Fact]
+    public async Task CreateAsync_auto_inserts_Start_node_at_level_1_with_no_block()
+    {
+        await using var f = await SetupAsync();
+
+        var result = await _workflows.CreateAsync(f.VersionId, "_test_wf_start_invariant", null);
+        Assert.Equal(CreateWorkflowOutcome.Created, result.Outcome);
+
+        var workflow = await _workflows.GetByIdAsync(result.Id!.Value);
+        Assert.NotNull(workflow!.StartNodeId);
+
+        // Read the Start row directly to verify shape: node_type_id=1
+        // (Start), block_catalog_id=NULL (schema CHECK requires it for
+        // Start), execution_level=1, no paths set.
+        using var c = await _connectionFactory.CreateOpenConnectionAsync();
+        var start = await c.QuerySingleAsync<(int NodeTypeId, int? BlockCatalogId, int ExecutionLevel, int? Path1, int? Path2)>(@"
+            SELECT node_type_id, block_catalog_id, execution_level, path1_node_id, path2_node_id
+            FROM dbo.workflow_nodes WHERE id = @id;",
+            new { id = workflow.StartNodeId!.Value });
+        Assert.Equal(1, start.NodeTypeId);
+        Assert.Null(start.BlockCatalogId);
+        Assert.Equal(1, start.ExecutionLevel);
+        Assert.Null(start.Path1);
+        Assert.Null(start.Path2);
+    }
+
+    [Fact]
+    public async Task CreateAsync_does_not_leak_workflow_when_rejected_by_state_gate()
+    {
+        // If the version isn't Draft, the workflow row never inserts, and
+        // therefore the Start never inserts either. Verify nothing landed.
+        await using var f = await SetupAsync();
+        await ForceVersionStateAsync(f.VersionId, RequestStateCodes.InService);
+
+        var result = await _workflows.CreateAsync(f.VersionId, "_test_wf_no_partial", null);
+        Assert.Equal(CreateWorkflowOutcome.RejectedNotDraft, result.Outcome);
+        Assert.Null(result.Id);
+
+        using var c = await _connectionFactory.CreateOpenConnectionAsync();
+        var count = await c.ExecuteScalarAsync<int>(@"
+            SELECT COUNT(*) FROM dbo.workflow_definitions
+            WHERE request_type_version_id = @versionId;",
+            new { versionId = f.VersionId });
+        Assert.Equal(0, count);
     }
 
     [Fact]

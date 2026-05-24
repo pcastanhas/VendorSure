@@ -4,49 +4,72 @@
 
 ## Where we are
 
-**Phase 5 in progress.** Chunks 1-6 done. The designer route
-(`/admin/request-types/{typeId}/workflows/{workflowId}/designer`)
-now has a left-rail palette: Start + three terminals as fixed
-entries, one entry per active `block_catalog` row beneath. Drag
-a palette item onto the canvas → the JS module fires a
-`DotNetObjectReference` callback → `OnPaletteDropAsync` runs
-`WorkflowNodeRepository.CreateAsync` with an orphan-node seed
-(level=0, no path FKs) → re-mount with the new graph. First
-end-to-end write path from the designer. Palette is hidden when
-the version is read-only. Next: Chunk 7 (edge drawing — wire
-path1/path2 via UI).
+**Phase 5 in progress.** Chunks 1-7 done. Major design shift in
+Chunk 7 (the previous "free drop palette" model from Chunk 6 was
+superseded by a +-button graph-construction model):
 
-Phase 5 design settled before code:
+  - Every workflow has a Start node, auto-created in
+    `WorkflowDefinitionRepository.CreateAsync` inside the same
+    transaction that creates the workflow row. The workflow ⇒
+    Start invariant.
+  - The JS module draws + buttons on every non-terminal node's
+    open slots (one for Start/Process, two for Decision).
+  - Clicking + opens a block-picker popover anchored to the click
+    point. Terminals are offered only when the slot is empty
+    (insert-between is invalid for terminals — they have no
+    children to take a displaced child).
+  - Inserting a Decision into a non-empty slot opens an extra
+    dialog: "Which side should <existing child> attach to?"
+  - New repo method `IWorkflowNodeRepository.InsertChildAsync`
+    atomically inserts + wires + renumbers (uses the existing
+    `RenumberSubtreeAsync` recursive CTE under the hood).
+  - The schema still permits orphan nodes (level=0, no upstream
+    FK); the UI just doesn't create them. Old workflows from the
+    Chunk 6 surface that have orphans are dev artifacts.
+
+Test surface: 158 → 178 (+1 workflow def repo, +19 node repo).
+
+Phase 5 design settled before code (post-Chunk-7 shift):
   - **D3.js** for the SVG canvas. No React, no build pipeline,
-    one CDN/npm dep on a stable library.
+    one npm dep vendored locally.
   - **Fixed layout** computed from `execution_level` (vertical row)
     + parent-driven horizontal slots (path1 = left, path2 = right
     consistently). No `x`/`y` columns in the schema.
-  - **No designer-side validation.** Schema CHECKs only.
+  - **Graph rooted at Start** — every workflow has one and only
+    one Start, auto-created on workflow create. Graph grows from
+    Start via + buttons; no orphan nodes by construction.
+  - **Structural validity via UI affordances** — the schema CHECKs
+    are the safety net, but the UI doesn't let the user produce
+    structurally-invalid graphs in the first place.
+  - **Promotion-time validation** — Draft can hold half-wired
+    workflows; the `Draft → InService` transition refuses
+    workflows where any non-terminal node is missing required
+    children. (Implements Chunk 10.)
   - **`execution_level`** = topological depth. Designer renumbers
-    downstream nodes on insert/delete; engine walks levels in Phase 6+.
+    downstream nodes on insert/delete; engine walks levels in
+    Phase 6+.
   - **Branch merging deferred** — schema permits, editor refuses.
   - **Workflows tab → list page** on the Request Type detail page.
   - **Designer opens on a separate route**
     `/admin/request-types/{typeId}/workflows/{workflowId}/designer`.
-  - **Auto-save per atomic edit.** Each insert/drag/delete commits
-    its own transaction.
+  - **Auto-save per atomic edit.** Each insert/delete commits its
+    own transaction.
   - **Block + artifact catalog seeded manually on dev DB** by the
     user. Phase 5 code reads them as-is.
 
 Read these to get oriented:
 - `docs/PLAN.md` — the phase/chunk roadmap. **Next step is Phase 5
-  / Chunk 7 — edge drawing (wire path1/path2 via UI).** PLAN's
-  provisional Phase 5 chunk list was superseded by the design
-  conversation; the locked-in plan lives in the previous chat
-  transcript and on the commit log.
+  / Chunk 8 — node property editor.** PLAN's provisional Phase 5
+  chunk list was superseded by the design conversation; the
+  locked-in plan lives in the chat transcripts and on the commit
+  log.
 - `docs/data-model.sql` — the reviewed schema.
 - `docs/CONCEPT.md` — design intent. §3.3 covers Settings, User Groups,
   Users, Required Documents, and the Request Type editor in detail;
   §3.1 and §3.2 still scheduled for refresh in Phase 6 / Phase 9.
 - `BUILD.md` — how to build/run locally. "What's currently built
   (Phases 1-4)" summarises the shipped surface.
-- `LessonsLearned.md` — fourteen entries.
+- `LessonsLearned.md` — fifteen entries.
 - `docs/REMOVE-BEFORE-PROD.md` — debug identity shim cutover checklist.
 
 ## Approach rules (locked in during design)

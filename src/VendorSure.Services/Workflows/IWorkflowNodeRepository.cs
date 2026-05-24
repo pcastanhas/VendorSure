@@ -2,6 +2,56 @@ using VendorSure.Domain.Workflows;
 
 namespace VendorSure.Services.Workflows;
 
+/// <summary>Outcome of <see cref="IWorkflowNodeRepository.InsertChildAsync"/>.</summary>
+public enum InsertChildOutcome
+{
+    Inserted,
+
+    /// <summary>The parent node doesn't exist.</summary>
+    RejectedParentNotFound,
+
+    /// <summary>The parent's workflow version isn't Draft.</summary>
+    RejectedNotDraft,
+
+    /// <summary>
+    /// The parent is a terminal node (Approved/Rejected/Cancelled) and
+    /// can't have children. The UI shouldn't have rendered a + button
+    /// here; this outcome is the defensive case.
+    /// </summary>
+    RejectedParentIsTerminal,
+
+    /// <summary>
+    /// The new node's <c>node_type_id</c> / <c>block_catalog_id</c>
+    /// pairing violates the schema's CK_workflow_nodes_block_by_type
+    /// CHECK. Same meaning as <see cref="CreateNodeOutcome.RejectedInvalidShape"/>.
+    /// </summary>
+    RejectedInvalidShape,
+}
+
+public sealed record InsertChildResult(InsertChildOutcome Outcome, int? Id);
+
+/// <summary>
+/// Input record for <see cref="IWorkflowNodeRepository.InsertChildAsync"/>.
+/// </summary>
+/// <param name="ParentNodeId">Node the + button was clicked on.</param>
+/// <param name="ParentSlot">Which parent slot the new node attaches to: 1 = path1, 2 = path2. Must be 1 for Start/Process parents; either for Decision parents.</param>
+/// <param name="NodeTypeId">Type of the new node (1=Start, 2=Process, 3=Decision, 4=Approved, 5=Rejected, 6=Cancelled).</param>
+/// <param name="BlockCatalogId">Required for Process/Decision, must be null for Start/terminals.</param>
+/// <param name="DecisionChildSlot">
+/// Only meaningful when the new node is a Decision being inserted between
+/// a parent and an existing child. Specifies which slot of the new
+/// Decision (1 = path1, 2 = path2) inherits the displaced child. The
+/// other slot is left null and gets filled later by the user. Pass null
+/// when the parent's slot was empty (append case) or when the new node
+/// isn't a Decision.
+/// </param>
+public sealed record InsertChildRequest(
+    int ParentNodeId,
+    int ParentSlot,
+    int NodeTypeId,
+    int? BlockCatalogId,
+    int? DecisionChildSlot = null);
+
 /// <summary>Outcome of <see cref="IWorkflowNodeRepository.CreateAsync"/>.</summary>
 public enum CreateNodeOutcome
 {
@@ -183,6 +233,47 @@ public interface IWorkflowNodeRepository
     /// interface).
     /// </summary>
     Task<DeleteNodeResult> DeleteAsync(int id, CancellationToken ct = default);
+
+    /// <summary>
+    /// High-level "add a child node" operation introduced for the
+    /// +-button graph-construction model. Atomically inserts the new
+    /// node, wires it into the parent's slot, optionally splices an
+    /// existing child below it, and renumbers any displaced subtree.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// Two scenarios, both handled in one call:
+    /// </para>
+    /// <list type="number">
+    ///   <item>
+    ///     <b>Append</b> — parent's slot is currently null. The new node
+    ///     becomes the parent's child; the new node has no children yet.
+    ///   </item>
+    ///   <item>
+    ///     <b>Insert-between</b> — parent's slot already points at child C.
+    ///     The new node takes C's place under the parent; C becomes the
+    ///     new node's child. If the new node is a Decision, the caller
+    ///     specifies which Decision slot (1 or 2) C inherits via
+    ///     <see cref="InsertChildRequest.DecisionChildSlot"/>. For Start
+    ///     and Process new-nodes, C goes into path1 by definition (the
+    ///     only available slot). Terminals can't be inserted between
+    ///     because they can't have children — UI must filter them out
+    ///     of the picker when the slot is non-empty.
+    ///   </item>
+    /// </list>
+    /// <para>
+    /// All work happens in one transaction. On any failure the whole
+    /// thing rolls back; partial state is impossible.
+    /// </para>
+    /// <para>
+    /// Argument validation: <see cref="InsertChildRequest.ParentSlot"/>
+    /// out of {1, 2}, or <see cref="InsertChildRequest.DecisionChildSlot"/>
+    /// missing when required, throw <see cref="ArgumentException"/> —
+    /// these are caller bugs, not user-visible state.
+    /// </para>
+    /// </remarks>
+    Task<InsertChildResult> InsertChildAsync(
+        InsertChildRequest request, CancellationToken ct = default);
 
     /// <summary>
     /// Sets <c>workflow_definitions.start_node_id</c> for the given
