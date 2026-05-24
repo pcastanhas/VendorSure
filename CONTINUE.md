@@ -4,15 +4,15 @@
 
 ## Where we are
 
-**Phase 4 in progress.** Chunks 1-7 done (repositories for type +
+**Phase 4 in progress.** Chunks 1-8 done (repositories for type +
 version, junction, validations + validation-doc junction; admin
 list page; detail page with header section + type-level edit + tabs
-scaffold; Required Documents tab wired; Validations tab wired with
-add/edit/delete + sub-picker for attached documents). Next: Phase 4
-/ Chunk 8 (Selection Prompt tab).
+scaffold; Required Documents tab; Validations tab; Selection Prompt
+tab). Next: Phase 4 / Chunk 9 (state transitions — Create new Draft,
+Place in Service, Supersede).
 
 Read these to get oriented:
-- `docs/PLAN.md` — the phase/chunk roadmap. **Next step is Phase 4 / Chunk 8.**
+- `docs/PLAN.md` — the phase/chunk roadmap. **Next step is Phase 4 / Chunk 9.**
 - `docs/data-model.sql` — the reviewed schema.
 - `docs/CONCEPT.md` — design intent. §3.3 covers Settings, User Groups,
   Users, Required Documents admin pages; §3.1 and §3.2 still scheduled
@@ -108,12 +108,32 @@ and `dotnet test`, reports back.
 
 ## Suggested next session
 
-**Phase 4 / Chunk 8 — Selection Prompt tab.**
+**Phase 4 / Chunk 9 — State transitions.**
 
-Per `docs/PLAN.md` Phase 4 Chunk 8: fill in the "Selection Prompt"
-tab. Single multi-line text area bound to the version's
-`workflow_selection_prompt` field with a Save button. Calls
-`IRequestTypeVersionRepository.UpdateAsync` (which already covers
-the prompt — see Chunk 1). Same Draft-only mutation rule.
+Per `docs/PLAN.md` Phase 4 Chunk 9: the buttons and SQL that turn
+Drafts into In-Service versions and supersede the prior In-Service.
+Three operations on `IRequestTypeVersionRepository`:
+
+  - **Create new Draft.** Atomic insert of the next version (existing
+    `CreateDraftAsync`'s behavior). UI: button on the detail page,
+    visible only when there's no current Draft.
+  - **Place in Service.** A single Draft transitions to InService, AND
+    the prior InService (if any) transitions to Superseded — both
+    atomic in a transaction, with both timestamps set
+    (`placed_in_service_ts` and `superseded_ts`). Until now nothing
+    has written `request_state` other than the seed Draft; this is
+    the first repo method that mutates state. Worth a dedicated
+    `TransitionToInServiceAsync` method.
+  - **View Superseded versions.** The version selector already lists
+    Superseded versions — Chunk 9 just needs to make sure the
+    'Create new Draft' button is hidden when one already exists, and
+    add 'Place in Service' to the version-section UI when the
+    displayed version is Draft.
+
+Tests live with the chunk: at least one for the atomic state
+transition (Draft → InService AND prior InService → Superseded in
+one transaction). This is the first place a multi-row state
+transition lands; carries the same atomicity rigor as
+CreateWithFirstDraftAsync.
 
 PAT note: each session, user provides a short-lived PAT for the repo.

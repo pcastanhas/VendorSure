@@ -1,0 +1,194 @@
+@*
+    Selection Prompt tab for the Request Type detail page.
+
+    Single multi-line text area bound to the version's
+    workflow_selection_prompt. The prompt is fed to the AI service at
+    submission time to pick a workflow among the type's published ones —
+    or, in the v1 workflow-less model, used purely as advisory context.
+    Either way the field is just text; this tab is a textarea + Save.
+
+    Same Draft-only mutation pattern as the other tabs:
+      - When IsDraft: textarea is editable, Save is enabled-when-dirty.
+      - When not IsDraft: textarea is read-only, no Save button shown.
+
+    Loads its own copy of the version via VersionRepository.GetByIdAsync.
+    The repo's UpdateAsync writes both Name and WorkflowSelectionPrompt
+    in one statement, so we have to round-trip the Name unchanged to
+    avoid clobbering it.
+*@
+
+@using VendorSure.Domain.RequestTypes
+@using VendorSure.Services.RequestTypes
+
+@inject IRequestTypeVersionRepository VersionRepository
+@inject ISnackbar Snackbar
+@inject ILogger<SelectionPromptTab> Logger
+
+@if (_loading)
+{
+    <MudProgressLinear Indeterminate="true" Color="Color.Primary" Class="my-2" />
+}
+else if (_version is null)
+{
+    <MudAlert Severity="Severity.Warning" Variant="Variant.Text">
+        Version <code>id=@VersionId</code> could not be loaded.
+    </MudAlert>
+}
+else
+{
+    <MudStack Spacing="3">
+        <MudText Typo="Typo.body2" Class="mud-text-secondary">
+            @if (IsDraft)
+            {
+                <span>
+                    Free-form prompt fed to the AI service when picking a
+                    workflow for incoming submissions. Leave blank if no
+                    AI-driven workflow selection is needed.
+                </span>
+            }
+            else
+            {
+                <span>Read-only — this version's selection prompt is frozen.</span>
+            }
+        </MudText>
+
+        <MudTextField @bind-Value="_editedPrompt"
+                      Label="Selection prompt"
+                      Variant="Variant.Outlined"
+                      Lines="12"
+                      ReadOnly="@(!IsDraft)"
+                      Immediate="true" />
+
+        @if (IsDraft)
+        {
+            <MudStack Row="true" Class="d-flex">
+                <MudSpacer />
+                <MudButton Variant="Variant.Filled"
+                           Color="Color.Primary"
+                           StartIcon="@Icons.Material.Filled.Save"
+                           OnClick="SaveAsync"
+                           Disabled="@(!IsDirty || _saving)">
+                    Save prompt
+                </MudButton>
+            </MudStack>
+        }
+    </MudStack>
+}
+
+@code {
+    [Parameter, EditorRequired] public int VersionId { get; set; }
+    [Parameter, EditorRequired] public bool IsDraft { get; set; }
+
+    private RequestTypeVersion? _version;
+    private string _loadedPrompt = string.Empty;
+    private string _editedPrompt = string.Empty;
+
+    private bool _loading = true;
+    private bool _saving;
+
+    private int _loadedForVersionId = -1;
+
+    private bool IsDirty =>
+        !string.Equals(
+            NormalizeForCompare(_editedPrompt),
+            NormalizeForCompare(_loadedPrompt),
+            StringComparison.Ordinal);
+
+    protected override async Task OnParametersSetAsync()
+    {
+        if (VersionId == _loadedForVersionId) return;
+        _loadedForVersionId = VersionId;
+        await LoadAsync();
+    }
+
+    private async Task LoadAsync()
+    {
+        _loading = true;
+        try
+        {
+            _version = await VersionRepository.GetByIdAsync(VersionId);
+            _loadedPrompt = _version?.WorkflowSelectionPrompt ?? string.Empty;
+            _editedPrompt = _loadedPrompt;
+        }
+        catch (Exception ex)
+        {
+            Logger.LogError(ex, "Failed to load version id={VersionId} for Selection Prompt tab.", VersionId);
+            Snackbar.Add("Failed to load. Check the log.", Severity.Error);
+            _version = null;
+        }
+        finally
+        {
+            _loading = false;
+        }
+    }
+
+    private async Task SaveAsync()
+    {
+        if (_version is null || !IsDraft || !IsDirty) return;
+
+        _saving = true;
+        try
+        {
+            // Round-trip Name unchanged — UpdateAsync writes both fields
+            // in one statement and we only want to mutate the prompt here.
+            var edited = new RequestTypeVersion
+            {
+                Id = _version.Id,
+                RequestTypeId = _version.RequestTypeId,
+                Version = _version.Version,
+                RequestState = _version.RequestState,
+                Name = _version.Name,
+                WorkflowSelectionPrompt = NormaliseForSave(_editedPrompt),
+                CreatedTs = _version.CreatedTs,
+                PlacedInServiceTs = _version.PlacedInServiceTs,
+                SupersededTs = _version.SupersededTs,
+            };
+
+            var result = await VersionRepository.UpdateAsync(edited);
+            switch (result)
+            {
+                case UpdateRequestTypeVersionResult.Updated:
+                    Logger.LogInformation(
+                        "Selection prompt updated on version id={VersionId}.", VersionId);
+                    Snackbar.Add("Saved.", Severity.Success);
+                    await LoadAsync();
+                    break;
+
+                case UpdateRequestTypeVersionResult.NotFound:
+                    Snackbar.Add("Cannot save: version no longer exists.", Severity.Warning);
+                    await LoadAsync();
+                    break;
+
+                case UpdateRequestTypeVersionResult.RejectedNotDraft:
+                    Snackbar.Add("Cannot save: version is no longer Draft.", Severity.Error);
+                    await LoadAsync();
+                    break;
+            }
+        }
+        catch (Exception ex)
+        {
+            Logger.LogError(ex, "Failed to save selection prompt on version id={VersionId}.", VersionId);
+            Snackbar.Add($"Failed to save: {ex.Message}", Severity.Error);
+        }
+        finally
+        {
+            _saving = false;
+        }
+    }
+
+    /// <summary>
+    /// The schema column is nullable; if the user clears the field to all
+    /// whitespace, persist as null (clean state) rather than an empty
+    /// string with whitespace baked in.
+    /// </summary>
+    private static string? NormaliseForSave(string? raw)
+        => string.IsNullOrWhiteSpace(raw) ? null : raw;
+
+    /// <summary>
+    /// Treat null and empty as the same value when checking dirty state,
+    /// so a freshly-loaded null prompt doesn't look "dirty" just because
+    /// the textarea showed empty string.
+    /// </summary>
+    private static string NormalizeForCompare(string? raw)
+        => raw ?? string.Empty;
+}

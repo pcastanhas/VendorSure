@@ -162,9 +162,17 @@ else
                 }
             </MudTabPanel>
             <MudTabPanel Text="Selection Prompt" Icon="@Icons.Material.Filled.AltRoute">
-                <MudAlert Severity="Severity.Info" Variant="Variant.Text">
-                    Selection-prompt editor ships in Phase 4 / Chunk 8.
-                </MudAlert>
+                @if (_selectedVersion is not null)
+                {
+                    <SelectionPromptTab VersionId="@_selectedVersion.Id"
+                                        IsDraft="@(_selectedVersion.RequestState == RequestState.Draft)" />
+                }
+                else
+                {
+                    <MudAlert Severity="Severity.Info" Variant="Variant.Text">
+                        Select a version to view its selection prompt.
+                    </MudAlert>
+                }
             </MudTabPanel>
         </MudTabs>
     </MudPaper>
