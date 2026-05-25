@@ -437,7 +437,7 @@ if a natural point comes up).
 
 ---
 
-### Phase 6A — Storage
+### Phase 6A — Storage ✓ COMPLETE
 
 #### Chunks
 

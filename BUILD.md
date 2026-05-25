@@ -13,7 +13,7 @@
   table on the first request; both need to work for the app to come up
   signed in.
 
-## What's currently built (Phases 1-5)
+## What's currently built (Phases 1-5, 6A)
 
 End-to-end surface as of the Phase 5 rollup:
 
@@ -142,6 +142,30 @@ End-to-end surface as of the Phase 5 rollup:
   referenced by any workflow_node (admin must deactivate and
   create a new block with the new class). Repo enforces the same
   rule (`UpdateBlockCatalogOutcome.RejectedClassNameChangeBlocked`).
+
+**Document storage (Phase 6A):**
+
+- `IDocumentStorage` abstraction in `VendorSure.Services.Documents`
+  with three operations: `StoreAsync`, `RetrieveAsync`,
+  `DeleteAllForRequestAsync`.
+- `LocalDiskDocumentStorage` impl in `VendorSure.Infrastructure.Documents`.
+  Writes files under `{Storage.BasePath}/{requestId}/{fileName}`.
+  Settings are re-read on every call so admin-panel edits take
+  effect immediately.
+- Two upload guardrails enforced at store time, before bytes hit
+  disk and before any AI call:
+  - `Storage.AllowedFileExtensions` — comma-separated allow-list
+    (seeded as `pdf,jpg,jpeg,png,gif,webp,txt`, matching what
+    Anthropic's API can process directly).
+  - `Storage.MaxFileSizeBytes` — per-file size cap (seeded at
+    10 MB).
+- User-facing rejections (disallowed extension, oversized file)
+  surface as `StoreDocumentOutcome` values for the caller to
+  render. Programmer-error / hostile-input filename violations
+  (path separators, `..`, null bytes, empty, >200 chars) throw
+  `InvalidDocumentFileNameException`.
+- No UI yet — the storage abstraction will be exercised by the
+  validation runner (6B.2) and the submission portal (6C).
 
 ## First-time setup
 

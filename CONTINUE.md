@@ -4,12 +4,14 @@
 
 ## Where we are
 
-**Phase 5 complete.** Chunks 1-7, 9, and 10 shipped, followed by an
-extensive post-Chunk-10 cleanup pass. Chunk 8 (node property editor)
-remains deferred — `WorkflowNodeRepository.UpdateAsync` handles all
-the property fields, so the only missing piece is a side-panel UI.
+**Phase 6A complete.** Storage abstraction shipped. Phase 5 stayed at
+Chunks 1-7, 9, 10 + post-Chunk-10 cleanup; Chunk 8 (node property
+editor) was reviewed at the start of the Phase 6 design conversation
+and dropped as stale — the Phase 6 deliverables don't need it, and
+Phase 7 can scope a fresh side panel against the actual engine
+requirements if per-node prompts turn out to be needed there.
 
-The Phase 5 build sequence:
+The Phase 5 build sequence (history, unchanged):
 
 - **Chunks 1-4** — Workflow definition / node / block catalog repos
   plus the designer page shell.
@@ -113,18 +115,38 @@ Phase 5 design (locked in by the end of the cleanup):
   - **Auto-save per atomic edit.** Each insert/delete/edit commits
     its own transaction.
 
+**Phase 6A — Storage.** Single chunk. `IDocumentStorage` in Services
+with three operations (`StoreAsync`, `RetrieveAsync`,
+`DeleteAllForRequestAsync`) plus result-record returns;
+`LocalDiskDocumentStorage` impl in Infrastructure writing under
+`{Storage.BasePath}/{requestId}/{fileName}`. Two new upload guardrails
+seeded into `data-model.sql` §16: `Storage.AllowedFileExtensions`
+(default `pdf,jpg,jpeg,png,gif,webp,txt` — what Anthropic's API can
+process directly) and `Storage.MaxFileSizeBytes` (default 10 MB).
+User-facing rejections (disallowed extension, oversized file) are
+modelled as outcome enums per codebase convention. Programmer-error /
+hostile-input filename violations (path separators, `..`, null bytes,
+empty, >200 chars) throw `InvalidDocumentFileNameException`. Settings
+are re-read on every call so admin-panel edits take effect
+immediately. 18 unit tests against a per-test temp directory with a
+hand-rolled `FakeSettingsRepository` — no DB needed for this surface.
+NAS integration test deferred.
+
+**Test surface: 220 → 238** after Phase 6A (Phase 5 baseline was 220
+after the cleanup pass; 6A adds 18).
+
 Read these to get oriented:
-- `docs/PLAN.md` — the phase/chunk roadmap. Phase 5 is done;
-  next is Phase 6. PLAN's Phase 5 section reflects what shipped
-  (the provisional chunk list was superseded by the design
-  conversation, captured both there and in commit messages).
-- `docs/data-model.sql` — the reviewed schema.
-- `docs/CONCEPT.md` — design intent. The workflow designer section
-  was refreshed multiple times across Phase 5 and is current as of
-  the cleanup. §3.1 and §3.2 still scheduled for refresh in
-  Phase 6 / Phase 9.
+- `docs/PLAN.md` — the phase/chunk roadmap. Phases 1-5 and 6A done;
+  next is 6B (AI Service + Validation Runner, two chunks). Phase 6
+  was restructured into sub-phases 6A/6B/6C before 6A code landed;
+  see the Phase 6 section for the current shape.
+- `docs/data-model.sql` — the reviewed schema. Phase 6A added two
+  rows to the §16 settings seed.
+- `docs/CONCEPT.md` — design intent. §3.1 and §3.2 still scheduled
+  for refresh at the end of 6C, when the portal and validation
+  model exist in code.
 - `BUILD.md` — how to build/run locally. "What's currently built
-  (Phases 1-5)" summarises the shipped surface.
+  (Phases 1-5, 6A)" summarises the shipped surface.
 - `LessonsLearned.md` — twenty-three entries.
 - `docs/REMOVE-BEFORE-PROD.md` — debug identity shim cutover checklist.
 
@@ -213,38 +235,57 @@ and `dotnet test`, reports back.
 
 ## Suggested next session
 
-**Phase 5 is complete.** Next is **Phase 6**, now split into three
-sub-phases to keep each session's work inside the token budget:
+**Phase 6A is complete.** Storage shipped. Phase 6 continues:
 
-- **6A — Storage.** One chunk: `IDocumentStorage` +
-  `LocalDiskDocumentStorage`.
-- **6B — AI Service + Validation Runner.** Two chunks: 6B.1 AI Service
-  (with throwaway `/test/ai` page), 6B.2 Validation Runner (with
-  throwaway `/test/runner` page).
+- **6A — Storage.** ✓ Done.
+- **6B — AI Service + Validation Runner.** Next. Two chunks:
+  - **6B.1 AI Service** — `Anthropic.SDK` NuGet ref, `model_pricing`
+    seed, `Anthropic:ApiKey` in user secrets, `IAiService` in Services,
+    impl in Infrastructure honoring `AI.Disabled`, computing cost,
+    writing `ai_usage`. Throwaway `/test/ai` page.
+  - **6B.2 Validation Runner** — `IValidationRunner.RunAsync(requestId)`,
+    sequential per-validation AI calls, `ValidationResult` artifacts,
+    SignalR hub keyed on request ID. Throwaway `/test/runner` page that
+    operates against a real pre-seeded `requests` row (you'll seed a
+    Request Type with three validations: obvious pass / obvious fail /
+    could-go-either-way, plus the matching `requests` +
+    `request_documents` + files on disk).
 - **6C — Submission Portal.** Four chunks: pick-type, upload, results,
-  re-submit. Removes both test pages.
+  re-submit. Removes both test pages. CONCEPT.md §3.1 + §3.2 rewrite
+  lands with the 6C doc commit.
 
-Doc commit at the end of *each* sub-phase. CONCEPT.md §3.1 + §3.2
-refresh lands at the 6C doc commit.
-
-The Phase 5 Chunk 8 carry-over (node property editor) was reviewed
-and **dropped as stale** at the start of the 6A session — the engine
-does not in fact need it for Phase 6, and if/when per-node prompts
-are needed for Phase 7 the side panel can be scoped fresh against
-the actual engine requirements.
+Doc commit at the end of *each* sub-phase.
 
 Read the Phase 6 section in `docs/PLAN.md` for the full chunk-level
-detail before starting code on 6A.
+detail before starting code on 6B.
+
+### Local-machine follow-up from 6A
+
+Before starting 6B work on a fresh machine, make sure the two new
+settings rows exist in your dev DB. The §16 INSERT in
+`data-model.sql` lists them; equivalently, run:
+
+```sql
+INSERT INTO dbo.settings ([key],[description],[required],[sensitive],[value])
+VALUES
+    ('Storage.AllowedFileExtensions',
+     'Comma-separated, lowercase, no dots. Allow-list of upload extensions; should match what the AI API can process.',
+     1, 0, 'pdf,jpg,jpeg,png,gif,webp,txt'),
+    ('Storage.MaxFileSizeBytes',
+     'Per-file upload size cap (bytes). Files exceeding this are rejected at upload time before reaching the AI service.',
+     1, 0, '10485760');
+```
+
+A `dotnet build` + `dotnet test` should land at 238 tests passing.
 
 ### Top of the TODO list for next session
 
 In rough priority order:
 
-1. **Ship Phase 6A — Storage.** Single chunk. See PLAN.md Phase 6A.
-   `IDocumentStorage` interface in Services, `LocalDiskDocumentStorage`
-   impl in Infrastructure, unit tests against a temp directory,
-   integration test against the NAS path if available. Then 6A doc
-   commit (standard files; no CONCEPT.md changes expected).
+1. **Ship Phase 6B — AI Service + Validation Runner.** Two chunks; see
+   PLAN.md Phase 6B. 6B.1 first (small, self-contained, ends with a
+   working `/test/ai` page); 6B.2 second (larger; depends on both 6A's
+   storage and 6B.1's AI service). Doc commit at the end.
 
 2. **Wire CI.** Tests run on the developer's machine via
    `dotnet test`. A buggy Chunk 9 commit shipped because the test
