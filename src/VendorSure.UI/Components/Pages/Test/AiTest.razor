@@ -1,0 +1,122 @@
+@* THROWAWAY: this page is the 6B.1 harness for IAiService. Removed at the
+   end of Phase 6 once the real submission portal and validation runner
+   surfaces exist. Do not link from the main nav. *@
+@page "/test/ai"
+@attribute [Authorize]
+
+@using Microsoft.AspNetCore.Authorization
+@using VendorSure.Services.Ai
+
+@inject IAiService AiService
+@inject ISnackbar Snackbar
+@inject ILogger<AiTest> Logger
+
+<PageTitle>AI test — VendorSure</PageTitle>
+
+<MudText Typo="Typo.h4" GutterBottom="true">AI test</MudText>
+<MudText Typo="Typo.body2" Class="mb-4 mud-text-secondary">
+    Throwaway harness for <code>IAiService.CompleteAsync</code>. Type a
+    prompt, hit Run, watch a Claude call go out and land in
+    <code>dbo.ai_usage</code>. This page disappears in Phase 6C.
+</MudText>
+
+<MudGrid Spacing="3">
+    <MudItem xs="12" md="6">
+        <MudPaper Class="pa-4" Elevation="1">
+            <MudText Typo="Typo.h6" GutterBottom="true">Prompt</MudText>
+            <MudTextField @bind-Value="_prompt"
+                          Placeholder="Say hello."
+                          Lines="8"
+                          Variant="Variant.Outlined"
+                          Disabled="@_running" />
+            <MudButton Variant="Variant.Filled"
+                       Color="Color.Primary"
+                       Class="mt-3"
+                       OnClick="RunAsync"
+                       Disabled="@(_running || string.IsNullOrWhiteSpace(_prompt))">
+                @if (_running)
+                {
+                    <MudProgressCircular Size="Size.Small" Indeterminate="true" Class="mr-2" />
+                    <span>Running…</span>
+                }
+                else
+                {
+                    <span>Run</span>
+                }
+            </MudButton>
+        </MudPaper>
+    </MudItem>
+
+    <MudItem xs="12" md="6">
+        <MudPaper Class="pa-4" Elevation="1">
+            <MudText Typo="Typo.h6" GutterBottom="true">Response</MudText>
+            @if (_result is not null)
+            {
+                <MudText Style="white-space: pre-wrap;">@_result.ResponseText</MudText>
+
+                <MudDivider Class="my-3" />
+
+                <MudText Typo="Typo.body2"><strong>Model:</strong> <code>@_result.Model</code></MudText>
+                <MudText Typo="Typo.body2"><strong>Tokens:</strong> @_result.InputTokens in / @_result.OutputTokens out</MudText>
+                <MudText Typo="Typo.body2"><strong>Cost:</strong> $@_result.CostUsd.ToString("F6")</MudText>
+                <MudText Typo="Typo.body2"><strong>Latency:</strong> @_result.LatencyMs ms</MudText>
+                <MudText Typo="Typo.body2"><strong>ai_usage row id:</strong> @_result.AiUsageId</MudText>
+            }
+            else if (_error is not null)
+            {
+                <MudAlert Severity="Severity.Error" Variant="Variant.Outlined">@_error</MudAlert>
+            }
+            else
+            {
+                <MudText Class="mud-text-secondary"><em>Run a prompt to see the response.</em></MudText>
+            }
+        </MudPaper>
+    </MudItem>
+</MudGrid>
+
+@code {
+    private string _prompt = string.Empty;
+    private AiCallResult? _result;
+    private string? _error;
+    private bool _running;
+
+    private async Task RunAsync()
+    {
+        _running = true;
+        _result = null;
+        _error = null;
+        StateHasChanged();
+
+        try
+        {
+            _result = await AiService.CompleteAsync(_prompt, new AiCallContext());
+            Snackbar.Add($"Call succeeded — ai_usage.id={_result.AiUsageId}.", Severity.Success);
+        }
+        catch (AiDisabledException ex)
+        {
+            _error = ex.Message;
+            Snackbar.Add("AI is disabled. No call made.", Severity.Warning);
+        }
+        catch (ModelPricingMissingException ex)
+        {
+            _error = ex.Message;
+            Snackbar.Add("Model pricing missing. See message.", Severity.Warning);
+        }
+        catch (AiCallFailedException ex)
+        {
+            _error = $"{ex.Status}: {ex.Message} (ai_usage.id={ex.AiUsageId})";
+            Snackbar.Add($"Call failed with status {ex.Status}.", Severity.Error);
+            Logger.LogError(ex, "AI test call failed.");
+        }
+        catch (Exception ex)
+        {
+            _error = ex.Message;
+            Snackbar.Add("Unexpected error — see logs.", Severity.Error);
+            Logger.LogError(ex, "Unexpected error in AI test page.");
+        }
+        finally
+        {
+            _running = false;
+        }
+    }
+}

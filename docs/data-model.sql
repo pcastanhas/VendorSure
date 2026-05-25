@@ -1031,6 +1031,15 @@ CREATE TABLE [dbo].[model_pricing] (
 );
 GO
 
+/* Starter seed: one row for the model AI.Model points at by default.
+   Bump / replace this row when Anthropic changes pricing (per the
+   stamp-effective-to + insert-new-row procedure above) or when admins
+   switch AI.Model to a different model. */
+INSERT INTO [dbo].[model_pricing] ([model_name],[effective_from],[effective_to],[input_per_million_usd],[output_per_million_usd])
+VALUES
+    ('claude-haiku-4-5', '2025-01-01', NULL, 1.0000, 5.0000);
+GO
+
 
 /* ============================================================================
    16. SETTINGS SEED
@@ -1047,6 +1056,9 @@ GO
                                        match what the AI API can process.
      - Storage.MaxFileSizeBytes     — per-file upload cap (bytes)
      - AI.Disabled                  — runtime shutoff flag (budget worker writes)
+     - AI.Model                     — Claude model identifier the AI service
+                                      calls. Must match a current row in
+                                      model_pricing.
      - AI.Monthly.Budget.Enabled    — master switch for the budget feature
      - AI.Monthly.Budget.Usd        — hard ceiling
      - AI.Monthly.Budget.WarningThreshold — pct (e.g. 80) to email at
@@ -1066,6 +1078,7 @@ VALUES
     ('Storage.AllowedFileExtensions',         'Comma-separated, lowercase, no dots. Allow-list of upload extensions; should match what the AI API can process.', 1, 0, 'pdf,jpg,jpeg,png,gif,webp,txt'),
     ('Storage.MaxFileSizeBytes',              'Per-file upload size cap (bytes). Files exceeding this are rejected at upload time before reaching the AI service.', 1, 0, '10485760'),
     ('AI.Disabled',                           'Runtime AI shutoff flag. Written by the budget worker; read by the AI service. 1 = AI off.', 1, 0, '0'),
+    ('AI.Model',                              'Claude model identifier the AI service calls (e.g. claude-haiku-4-5). Must match a current row in model_pricing.', 1, 0, 'claude-haiku-4-5'),
     ('AI.Monthly.Budget.Enabled',             'Master switch for the monthly budget feature.', 1, 0, '1'),
     ('AI.Monthly.Budget.Usd',                 'Hard ceiling in USD. When month-to-date cost exceeds this, AI.Disabled is set to 1.', 1, 0, '200'),
     ('AI.Monthly.Budget.WarningThreshold',    'Percent of budget at which to send the admin warning email.', 1, 0, '80'),
