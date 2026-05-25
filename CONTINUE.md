@@ -213,45 +213,40 @@ and `dotnet test`, reports back.
 
 ## Suggested next session
 
-**Phase 5 is complete.** Next is **Phase 6 — AI Service + Storage +
-Submission Portal**, per `docs/PLAN.md`. Phase 6 is also large and
-the chunk list there is provisional. Read the Phase 6 section in
-PLAN.md to start the design conversation before code.
+**Phase 5 is complete.** Next is **Phase 6**, now split into three
+sub-phases to keep each session's work inside the token budget:
+
+- **6A — Storage.** One chunk: `IDocumentStorage` +
+  `LocalDiskDocumentStorage`.
+- **6B — AI Service + Validation Runner.** Two chunks: 6B.1 AI Service
+  (with throwaway `/test/ai` page), 6B.2 Validation Runner (with
+  throwaway `/test/runner` page).
+- **6C — Submission Portal.** Four chunks: pick-type, upload, results,
+  re-submit. Removes both test pages.
+
+Doc commit at the end of *each* sub-phase. CONCEPT.md §3.1 + §3.2
+refresh lands at the 6C doc commit.
+
+The Phase 5 Chunk 8 carry-over (node property editor) was reviewed
+and **dropped as stale** at the start of the 6A session — the engine
+does not in fact need it for Phase 6, and if/when per-node prompts
+are needed for Phase 7 the side panel can be scoped fresh against
+the actual engine requirements.
+
+Read the Phase 6 section in `docs/PLAN.md` for the full chunk-level
+detail before starting code on 6A.
 
 ### Top of the TODO list for next session
 
 In rough priority order:
 
-1. **Open the Phase 6 design conversation.** Phase 6 introduces the
-   submission portal (submitter-facing UI), document storage
-   abstraction (`IDocumentStorage`, `LocalDiskDocumentStorage`),
-   Anthropic SDK wiring, the AI Service, and the workflow engine
-   itself. Lock in scope and chunk order before any code, the way
-   Phase 5 was settled in conversation before Chunk 7.
+1. **Ship Phase 6A — Storage.** Single chunk. See PLAN.md Phase 6A.
+   `IDocumentStorage` interface in Services, `LocalDiskDocumentStorage`
+   impl in Infrastructure, unit tests against a temp directory,
+   integration test against the NAS path if available. Then 6A doc
+   commit (standard files; no CONCEPT.md changes expected).
 
-2. **Chunk 8 — Node property editor (carried over from Phase 5).**
-   Side panel that lets users set `prompt_text`,
-   `approver_group_id`, `stale_threshold_days`, `stale_message_text`,
-   `notes` on individual nodes. The repo's `UpdateAsync` already
-   handles all these fields; what's missing is purely UI:
-   - Body-click handler on each node `<g>` in the JS module
-     (currently the body has only the hover-tooltip handlers).
-   - `[JSInvokable] OnNodeClickedAsync(nodeId)` opens a MudDrawer
-     side panel.
-   - Field shape depends on node type. For Human-actor blocks the
-     `prompt_text` is the question the approver sees; for
-     System/AI it's typically unused. Path labels live on
-     `block_catalog` (not the node), so the side panel doesn't
-     touch them.
-   - Auto-save on blur, the way the rest of Phase 5 saves.
-   - Selected-node visual highlight on the canvas.
-
-   This is a Phase 6 prerequisite: without it, the engine has no
-   per-node prompts to surface to human approvers or pass to AI
-   blocks. Plan to ship Chunk 8 as the first thing in Phase 6 or
-   immediately before it.
-
-3. **Wire CI.** Tests run on the developer's machine via
+2. **Wire CI.** Tests run on the developer's machine via
    `dotnet test`. A buggy Chunk 9 commit shipped because the test
    that should have caught the bug existed but apparently wasn't
    executed before commit. Wiring a minimal GitHub Action that runs

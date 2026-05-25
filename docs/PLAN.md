@@ -419,7 +419,27 @@ types notes, submits. The page transitions to a validation results view that
 updates live via SignalR as each Claude call resolves. Outcome: all pass →
 request number + email; any fail → submitter sees fix-list and can re-submit.
 
-### Chunks
+**Structure.** Phase 6 is split into three sub-phases to keep each session's
+work inside the token budget and produce natural handoff points:
+
+- **6A — Storage.** One chunk.
+- **6B — AI Service + Validation Runner.** Two chunks.
+- **6C — Submission Portal.** Four chunks.
+
+Doc commit at the end of *each* sub-phase, not just at the end of Phase 6.
+The CONCEPT.md §3.1 + §3.2 rewrite lands with the 6C doc commit, when the
+portal and validation model are actually built.
+
+Throwaway test pages: 6B.1 ships `/test/ai`, 6B.2 ships `/test/runner`. Both
+are temporary UI against the real services. They're removed by 6C — `/test/runner`
+at 6C.3 (results page replaces it), `/test/ai` at the 6C doc commit (or earlier
+if a natural point comes up).
+
+---
+
+### Phase 6A — Storage
+
+#### Chunks
 
 1. **Storage abstraction.** `IDocumentStorage` interface in Services;
    `LocalDiskDocumentStorage` impl in Infrastructure that reads
@@ -428,60 +448,90 @@ request number + email; any fail → submitter sees fix-list and can re-submit.
    **Test:** unit test the impl against a temp directory; integration test
    against the NAS path if available.
 
-2. **Anthropic SDK wiring + model_pricing seed.** Add `Anthropic.SDK` NuGet
-   reference. Seed at least one row in `model_pricing` for the model the AI
-   service will call. Configuration: `Anthropic:ApiKey` in user secrets.
-   **Test:** a tiny test page (`/test/ai`) with a button that calls Claude
-   with a trivial prompt and shows the response. (Test button removed in a
-   later chunk.)
+#### 6A doc commit
 
-3. **AI Service.** `IAiService` interface in Services. Impl in Infrastructure:
-   reads `AI.Disabled` from settings (throws `AiDisabledException` if true);
-   calls Claude via the SDK; computes cost from `model_pricing`; writes the
-   `ai_usage` row; returns the raw response to the caller. Doesn't interpret.
-   **Test:** the `/test/ai` page from chunk 2 now calls through the service;
-   `ai_usage` row appears in DB after each call with correct token counts
-   and cost.
+Standard: `BUILD.md`, `CONTINUE.md`, `LessonsLearned.md`, `PLAN.md` as
+relevant. No CONCEPT.md changes expected at 6A.
 
-4. **Validation runner.** Background task per submission: iterates over the
-   Request Type Version's validations in execution_order, calls the AI
-   service for each, writes a ValidationResult artifact (request-scoped),
-   publishes a SignalR event per result. Sequential, not parallel.
-   **Test:** invoke from a test endpoint with a fake request ID; observe
-   `ai_usage` rows and `request_workflow_artifacts` rows appearing; observe
-   SignalR events in browser console on the test page.
+---
 
-5. **Submission portal — pick request type page.** `/submit`. Logged-in user
-   sees a single dropdown of in-service Request Types. Picks one → routes to
-   the upload page with the type's required docs.
-   **Test:** seed two Request Types in service. Pick one. See expected upload
-   slots on the next page.
+### Phase 6B — AI Service + Validation Runner
 
-6. **Submission portal — upload page.** Grid of required-doc slots, file
-   picker per row, notes textarea, Submit button. Submit creates the
-   `requests` row (status `P`), writes files to storage, kicks off the
-   validation runner, navigates to the validation results page.
+Builds on 6A. The runner reads document content via `IDocumentStorage` and
+calls the AI Service per validation.
+
+#### Chunks
+
+1. **AI Service.** Add `Anthropic.SDK` NuGet reference. Seed at least one
+   row in `model_pricing` for the model the AI service will call.
+   Configuration: `Anthropic:ApiKey` in user secrets. `IAiService` interface
+   in Services; impl in Infrastructure that reads `AI.Disabled` from
+   settings (throws `AiDisabledException` if true), calls Claude via the
+   SDK, computes cost from `model_pricing`, writes the `ai_usage` row,
+   returns the raw response. Doesn't interpret.
+   **Test:** throwaway `/test/ai` page — text box for prompt, button, shows
+   response + token counts. `ai_usage` row appears in DB after each call
+   with correct token counts and cost.
+
+2. **Validation runner.** `IValidationRunner` in Services; impl in
+   Infrastructure. `RunAsync(int requestId)` loads the request, its RTV's
+   validations, and document content (via `IDocumentStorage` from 6A);
+   iterates validations in `execution_order`; calls the AI Service per
+   validation; writes a `ValidationResult` artifact (request-scoped) per
+   result; publishes a SignalR event per result. Sequential, not parallel.
+   SignalR hub keyed on request ID ships here.
+   **Test:** throwaway `/test/runner` page — text box for request ID, Run
+   button, SignalR-fed list streaming results. Seed a real `requests` row
+   + `request_documents` + files on disk + an RTV with three validations
+   (obvious pass / obvious fail / could-go-either-way) in the dev DB
+   ahead of time. Type the request ID, watch the three results stream.
+   `ai_usage` rows and `request_workflow_artifacts` rows appear in DB.
+
+#### 6B doc commit
+
+Standard. No CONCEPT.md changes expected at 6B.
+
+---
+
+### Phase 6C — Submission Portal
+
+Builds on 6A and 6B. Replaces both test pages.
+
+#### Chunks
+
+1. **Pick request type page.** `/submit`. Logged-in user sees a single
+   dropdown of in-service Request Types. Picks one → routes to the upload
+   page with the type's required docs.
+   **Test:** seed two Request Types in service. Pick one. See expected
+   upload slots on the next page.
+
+2. **Upload page.** Grid of required-doc slots, file picker per row, notes
+   textarea, Submit button. Submit creates the `requests` row (status `P`),
+   writes files via `IDocumentStorage`, kicks off the validation runner,
+   navigates to the validation results page.
    **Test:** complete the flow; row appears in `requests` with status `P`;
    files appear at `{BasePath}\{RequestID}\`.
 
-7. **Submission portal — validation results page.** Connects to SignalR hub
-   keyed on request ID. Renders validation list; rows update from spinner →
-   ✓ / ✗ as events arrive. ✗ rows have a "?" affordance that opens the
-   explanation. On all-pass: shows request number and triggers confirmation
-   email row in `outbound_emails`. On any fail: shows re-submit affordance.
+3. **Validation results page.** Connects to the SignalR hub keyed on request
+   ID. Renders validation list; rows update from spinner → ✓ / ✗ as events
+   arrive. ✗ rows have a "?" affordance that opens the explanation. On
+   all-pass: shows request number and triggers confirmation email row in
+   `outbound_emails`. On any fail: shows re-submit affordance.
+   **Removes** the `/test/runner` page — the results page is now the real
+   consumer of the runner's SignalR stream.
    **Test:** submit, watch live updates, see ✓ / ✗ rendering.
 
-8. **Re-submit handling.** From the failure state, user can re-attach files
+4. **Re-submit handling.** From the failure state, user can re-attach files
    for any (or all) slots and re-submit. Re-submit: wipes the storage
    directory, hard-deletes old `request_documents` rows, writes new files,
    re-runs all validations.
-   **Test:** submit with a deliberately wrong file, see fail, re-submit with
-   correct file, see pass.
+   **Test:** submit with a deliberately wrong file, see fail, re-submit
+   with correct file, see pass.
 
-### Phase 6 doc commit
+#### 6C doc commit
 
 Standard, plus CONCEPT.md §3.1 + §3.2 rewritten to reflect the actual portal
-and validation model.
+and validation model. `/test/ai` removed at this point if still present.
 
 ---
 
