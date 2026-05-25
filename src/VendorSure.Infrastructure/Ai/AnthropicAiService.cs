@@ -89,15 +89,15 @@ internal sealed class AnthropicAiService : IAiService
 
         // NOTE: the official Anthropic C# SDK is in beta. The shapes
         // below — MessageParam (confirmed), Role.User (assumed),
-        // _client.Messages.Create(params, ct), message.Usage.InputTokens/
-        // OutputTokens — are my best guess from the public docs. The
-        // remaining unverified spot: the Create overload may not accept
-        // a CancellationToken as the 2nd positional arg; if not, use
-        // WithOptions(o => o with { ... }) or pass CT differently per
-        // the SDK docs at platform.claude.com/docs/en/api/sdks/csharp.
-        // Content-block text extraction is JSON-based below
-        // (ExtractFirstTextBlock) so it's stable regardless of which
-        // typed accessor the SDK ends up exposing.
+        // _client.Messages.Create(params, ct), Usage.InputTokens /
+        // OutputTokens (confirmed long; cast to int below) — are my best
+        // guess from the public docs. The remaining unverified spot: the
+        // Create overload may not accept a CancellationToken as the 2nd
+        // positional arg; if not, use WithOptions(o => o with { ... })
+        // or pass CT differently per the SDK docs at
+        // platform.claude.com/docs/en/api/sdks/csharp. Content-block text
+        // extraction is JSON-based below (ExtractFirstTextBlock) so it's
+        // stable regardless of which typed accessor the SDK exposes.
         var parameters = new MessageCreateParams
         {
             MaxTokens = 1024,
@@ -121,8 +121,13 @@ internal sealed class AnthropicAiService : IAiService
             var message = await _client.Messages.Create(parameters, ct);
             sw.Stop();
 
-            var inputTokens = message.Usage.InputTokens;
-            var outputTokens = message.Usage.OutputTokens;
+            // SDK exposes Usage.InputTokens / OutputTokens as long; the
+            // ai_usage.input_tokens / output_tokens columns are int and the
+            // domain entity is int to match. Checked casts so a future
+            // long-context job that somehow tops 2^31 crashes loudly here
+            // rather than silently rolling negative on the way to the DB.
+            var inputTokens = checked((int)message.Usage.InputTokens);
+            var outputTokens = checked((int)message.Usage.OutputTokens);
             var cost = ComputeCost(inputTokens, outputTokens, pricing);
             var responseText = ExtractFirstTextBlock(message);
             var outputJson = JsonSerializer.Serialize(message, JsonOptions);
