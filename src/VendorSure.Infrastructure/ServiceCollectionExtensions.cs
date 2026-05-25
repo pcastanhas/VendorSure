@@ -43,6 +43,7 @@ public static class ServiceCollectionExtensions
         services.AddScoped<IWorkflowNodeRepository, WorkflowNodeRepository>();
         services.AddScoped<IBlockCatalogRepository, BlockCatalogRepository>();
         services.AddScoped<ISettingsRepository, SettingsRepository>();
+        services.AddScoped<IDocumentStorage, LocalDiskDocumentStorage>();
 
         return services;
     }

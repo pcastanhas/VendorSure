@@ -1042,6 +1042,10 @@ GO
 
    These keys are referenced throughout the app:
      - Storage.BasePath             — UNC path to NAS share (request files)
+     - Storage.AllowedFileExtensions — comma-separated, lowercase, no dots.
+                                       Allow-list of upload extensions; should
+                                       match what the AI API can process.
+     - Storage.MaxFileSizeBytes     — per-file upload cap (bytes)
      - AI.Disabled                  — runtime shutoff flag (budget worker writes)
      - AI.Monthly.Budget.Enabled    — master switch for the budget feature
      - AI.Monthly.Budget.Usd        — hard ceiling
@@ -1059,6 +1063,8 @@ GO
 INSERT INTO [dbo].[settings] ([key],[description],[required],[sensitive],[value])
 VALUES
     ('Storage.BasePath',                      'UNC path to the NAS share holding request document folders.', 1, 0, '\\NAS1\VendorSure'),
+    ('Storage.AllowedFileExtensions',         'Comma-separated, lowercase, no dots. Allow-list of upload extensions; should match what the AI API can process.', 1, 0, 'pdf,jpg,jpeg,png,gif,webp,txt'),
+    ('Storage.MaxFileSizeBytes',              'Per-file upload size cap (bytes). Files exceeding this are rejected at upload time before reaching the AI service.', 1, 0, '10485760'),
     ('AI.Disabled',                           'Runtime AI shutoff flag. Written by the budget worker; read by the AI service. 1 = AI off.', 1, 0, '0'),
     ('AI.Monthly.Budget.Enabled',             'Master switch for the monthly budget feature.', 1, 0, '1'),
     ('AI.Monthly.Budget.Usd',                 'Hard ceiling in USD. When month-to-date cost exceeds this, AI.Disabled is set to 1.', 1, 0, '200'),
