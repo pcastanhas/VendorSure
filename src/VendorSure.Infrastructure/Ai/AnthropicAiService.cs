@@ -87,19 +87,17 @@ internal sealed class AnthropicAiService : IAiService
         var pricing = await _pricing.GetCurrentForModelAsync(model, today, ct)
             ?? throw new ModelPricingMissingException(model);
 
-        // NOTE: the official Anthropic C# SDK is in beta and its exact type
-        // surface isn't fully visible without NuGet restore. The shapes
-        // below — MessageParam (confirmed by build), Role.User,
+        // NOTE: the official Anthropic C# SDK is in beta. The shapes
+        // below — MessageParam (confirmed), Role.User (assumed),
         // _client.Messages.Create(params, ct), message.Usage.InputTokens/
-        // OutputTokens, message.Content with TextBlock variant — are my
-        // best guess from the public docs. If the build complains, the
-        // SDK README at platform.claude.com/docs/en/api/sdks/csharp shows
-        // the current names. Most likely remaining fixes:
-        //   - TextBlock may live in a different namespace or expose Text
-        //     via a different accessor
-        //   - The Create overload may not accept a CancellationToken as
-        //     the 2nd positional arg; if not, use WithOptions(o => o with
-        //     { ... }) or pass CT differently per the SDK docs.
+        // OutputTokens — are my best guess from the public docs. The
+        // remaining unverified spot: the Create overload may not accept
+        // a CancellationToken as the 2nd positional arg; if not, use
+        // WithOptions(o => o with { ... }) or pass CT differently per
+        // the SDK docs at platform.claude.com/docs/en/api/sdks/csharp.
+        // Content-block text extraction is JSON-based below
+        // (ExtractFirstTextBlock) so it's stable regardless of which
+        // typed accessor the SDK ends up exposing.
         var parameters = new MessageCreateParams
         {
             MaxTokens = 1024,
@@ -251,21 +249,42 @@ internal sealed class AnthropicAiService : IAiService
 
     private static string ExtractFirstTextBlock(Message message)
     {
-        // The first content block in a Messages response is conventionally
-        // text; pull it out for the caller's convenience. The full message
-        // including all content blocks is still persisted verbatim in
-        // output_json, so callers that need more can read that.
+        // The Anthropic Messages API conventionally returns content as a list
+        // of blocks; for plain prompts the first block is text. We extract
+        // it for the caller's convenience. The full message (all blocks
+        // included) is still persisted verbatim in output_json, so callers
+        // that need more than the first text block can read that.
+        //
+        // Why JSON rather than a typed accessor: ContentBlock in the
+        // current SDK isn't a polymorphic hierarchy with TextBlock as a
+        // subclass — a 'block is TextBlock' pattern won't even compile.
+        // The exact typed accessor varies between SDK versions (Text
+        // property? AsText()? .Type discriminator?). Serializing to JSON
+        // and reading the 'text' field on the first 'type: text' block
+        // is stable across SDK shape changes and matches the wire format
+        // the API itself uses.
+        if (message.Content is null)
+        {
+            return string.Empty;
+        }
+
         foreach (var block in message.Content)
         {
-            // The SDK exposes content blocks polymorphically; the text
-            // variant has a Text property. Other block types (e.g. tool_use)
-            // are skipped here — we don't request tools in 6B.1, so they
-            // shouldn't appear.
-            if (block is TextBlock text)
+            var json = JsonSerializer.Serialize(block, JsonOptions);
+            using var doc = JsonDocument.Parse(json);
+            var root = doc.RootElement;
+
+            // Only consider text-type blocks. Tool-use / other variants
+            // are skipped (we don't request them in 6B.1).
+            if (root.TryGetProperty("type", out var typeProp)
+                && typeProp.GetString() == "text"
+                && root.TryGetProperty("text", out var textProp)
+                && textProp.ValueKind == JsonValueKind.String)
             {
-                return text.Text ?? string.Empty;
+                return textProp.GetString() ?? string.Empty;
             }
         }
+
         return string.Empty;
     }
 
