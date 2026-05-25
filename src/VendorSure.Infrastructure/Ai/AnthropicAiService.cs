@@ -89,24 +89,24 @@ internal sealed class AnthropicAiService : IAiService
 
         // NOTE: the official Anthropic C# SDK is in beta and its exact type
         // surface isn't fully visible without NuGet restore. The shapes
-        // below — InputMessage, Role.User, _client.Messages.Create(params, ct),
-        // message.Usage.InputTokens/OutputTokens, message.Content with
-        // TextBlock variant — are my best guess from the public docs and
-        // examples. If the build complains about any of these, the SDK
-        // README at platform.claude.com/docs/en/api/sdks/csharp shows the
-        // current names. Most likely fixes:
-        //   - InputMessage may be named differently (Message? MessageParam?)
+        // below — MessageParam (confirmed by build), Role.User,
+        // _client.Messages.Create(params, ct), message.Usage.InputTokens/
+        // OutputTokens, message.Content with TextBlock variant — are my
+        // best guess from the public docs. If the build complains, the
+        // SDK README at platform.claude.com/docs/en/api/sdks/csharp shows
+        // the current names. Most likely remaining fixes:
         //   - TextBlock may live in a different namespace or expose Text
         //     via a different accessor
-        //   - The Create overload may not accept a CancellationToken;
-        //     use WithOptions(o => o with { ... }) if so
+        //   - The Create overload may not accept a CancellationToken as
+        //     the 2nd positional arg; if not, use WithOptions(o => o with
+        //     { ... }) or pass CT differently per the SDK docs.
         var parameters = new MessageCreateParams
         {
             MaxTokens = 1024,
             Model = model,
-            Messages =
+            Messages = new[]
             {
-                new InputMessage
+                new MessageParam
                 {
                     Role = Role.User,
                     Content = prompt,
